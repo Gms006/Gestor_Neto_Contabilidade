@@ -1,0 +1,14 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+credentials.json
+token.json
+data/*.json
+data/raw_api/*
+data/raw_email/*
+data/*.txt
+*.log
+.DS_Store
+Thumbs.db

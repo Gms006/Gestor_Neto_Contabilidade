@@ -1,0 +1,44 @@
+{
+  "acessorias": {
+    "base_url": "https://api.acessorias.com",
+    "endpoints": {
+      "processes": "/processes",
+      "deliveries": "/deliveries",
+      "companies": "/companies"
+    },
+    "page_size": 20,
+    "proc_status": "A,C",
+    "dt_last_dh": null
+  },
+  "gmail": {
+    "query": "(from:contabil2@netocontabilidade.com.br) (subject:(\"Simples Nacional\" OR \"Lucro Presumido\" OR \"Lucro Real\")) newer_than:180d",
+    "max_results": 1000,
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
+  },
+  "deadlines": {
+    "sn_day": 20,
+    "reinf_day": 15
+  },
+  "warning_days": {
+    "sn": 3,
+    "reinf": 3
+  },
+  "departments": {
+    "fiscal": {
+      "enabled": true,
+      "categories": ["efd_reinf", "efd_contrib", "difal", "fora_das", "finalizacao"]
+    },
+    "contabilidade": {
+      "enabled": false,
+      "categories": []
+    },
+    "societario": {
+      "enabled": false,
+      "categories": []
+    },
+    "pessoal": {
+      "enabled": false,
+      "categories": []
+    }
+  }
+}
