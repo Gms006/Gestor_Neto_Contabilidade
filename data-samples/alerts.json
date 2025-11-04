@@ -1,0 +1,26 @@
+{
+  "sn_em_risco": [
+    {
+      "proc_id": "PROC-1001",
+      "empresa": "Empresa Exemplo LTDA",
+      "competencia": "2024-03",
+      "prazo": "2024-04-20"
+    }
+  ],
+  "reinf_em_risco": [
+    {
+      "proc_id": "PROC-3003",
+      "empresa": "Startup Modelo SA",
+      "competencia": "2024-03",
+      "prazo": "2024-04-18"
+    }
+  ],
+  "bloqueantes": [
+    {
+      "proc_id": "PROC-4004",
+      "empresa": "Distribuidora Norte",
+      "competencia": "2024-02",
+      "prazo": "2024-04-05"
+    }
+  ]
+}

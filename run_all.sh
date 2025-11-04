@@ -9,6 +9,7 @@ if [ -f ".venv/bin/activate" ]; then
 fi
 
 python3 scripts/fetch_api.py
+python3 scripts/fetch_deliveries.py
 python3 scripts/flatten_steps.py
 python3 scripts/fetch_email_imap.py
 python3 scripts/fuse_sources.py

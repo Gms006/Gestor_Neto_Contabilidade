@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 
+from scripts.utils.logger import log
+
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 OUT = DATA / "events_email.json"
@@ -129,10 +131,14 @@ def main():
     subject_kw     = cfg.get("imap", {}).get("subject_keywords", [])
     from_filters   = cfg.get("imap", {}).get("from_filters", [])
 
+    log("fetch_email_imap", "INFO", "Conectando", host=host, folder=folder)
+
     M = imaplib.IMAP4_SSL(host, port) if use_ssl else imaplib.IMAP4(host, port)
     if not use_ssl:
-        try: M.starttls()
-        except Exception: pass
+        try:
+            M.starttls()
+        except Exception as exc:
+            log("fetch_email_imap", "WARNING", "STARTTLS indisponível", error=str(exc))
 
     M.login(user, pwd)
     M.select(folder)
@@ -146,6 +152,7 @@ def main():
     ids = ids[-max_messages:]
 
     events: List[Dict[str, Any]] = []
+    log("fetch_email_imap", "INFO", "Processando mensagens", total=len(ids))
 
     for num in reversed(ids):
         typ, msg_data = M.fetch(num, "(RFC822)")
@@ -206,7 +213,7 @@ def main():
     M.logout()
 
     OUT.write_text(json.dumps(events, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[fetch_email_imap] OK: {OUT} ({len(events)} eventos)")
+    log("fetch_email_imap", "INFO", "Eventos gerados", total=len(events))
 
 
 if __name__ == "__main__":
