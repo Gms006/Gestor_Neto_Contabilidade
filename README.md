@@ -49,3 +49,12 @@ run_all.bat
 4. `fuse_sources.py` - Mescla API + email
 5. `build_processes_kpis_alerts.py` - Gera KPIs e alertas
 6. `web/index.html` - Visualiza dashboards
+
+## Front-end (site)
+
+- Os dados do portal são lidos diretamente dos arquivos `data/events.json`, `data/processes.json`, `data/kpis.json` e `data/alerts.json` gerados pela pipeline.
+- Para visualizar, abra o arquivo `web/index.html` no navegador (não é necessário servidor). O layout utiliza Tailwind via CDN e os gráficos são renderizados com Chart.js.
+- Cada aba (Dashboard, Obrigações, Processos, Alertas e Empresas) possui busca global, filtros avançados, ordenação clicável, paginação (50/100/200 itens) e exportação CSV conforme aplicável. Pressionar <kbd>Enter</kbd> nos campos de busca aciona o filtro.
+- Os filtros e opções de paginação são persistidos por aba em `localStorage`, e o hash da URL mantém a aba ativa e os filtros-chave para compartilhamento (`#tab=obrigacoes&q=...&status=...`).
+- Use o botão “🔄 Atualizar dados” no topo da página para recarregar os arquivos JSON localmente.
+- Para demonstrações sem pipeline, copie manualmente os arquivos de `data-samples/` para a pasta `data/` antes de abrir o site.

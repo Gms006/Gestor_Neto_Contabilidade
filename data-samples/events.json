@@ -1,0 +1,28 @@
+[
+  {
+    "proc_id": "PROC-1001",
+    "empresa": "Empresa Exemplo LTDA",
+    "cnpj": "12.345.678/0001-00",
+    "categoria": "efd_reinf",
+    "subtipo": "obrigatoria",
+    "status": "Obrigatória",
+    "responsavel": "Ana Silva",
+    "regime": "SN",
+    "competencia": "2024-03",
+    "data_evento": "2024-04-15",
+    "prazo": "2024-04-20"
+  },
+  {
+    "proc_id": "PROC-2002",
+    "empresa": "Exemplo Comercial ME",
+    "cnpj": "98.765.432/0001-11",
+    "categoria": "difal",
+    "subtipo": "consumo_imobilizado",
+    "status": "Dispensada",
+    "responsavel": "João Souza",
+    "regime": "LP",
+    "competencia": "2024-02",
+    "data_evento": "2024-03-05",
+    "prazo": "2024-03-10"
+  }
+]
