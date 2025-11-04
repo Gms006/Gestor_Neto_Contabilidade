@@ -93,6 +93,20 @@ def save_sync_state(state: Dict[str, Any]) -> None:
     SYNC_STATE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+
+def load_sync_state() -> Dict[str, Any]:
+    if SYNC_STATE.exists():
+        try:
+            return json.loads(SYNC_STATE.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            log("fetch_api", "WARNING", "sync_state inválido, reiniciando")
+    return {}
+
+
+def save_sync_state(state: Dict[str, Any]) -> None:
+    SYNC_STATE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def compute_dt_last_dh(last_value: Optional[str]) -> Optional[str]:
     if not last_value:
         return None
@@ -105,13 +119,11 @@ def compute_dt_last_dh(last_value: Optional[str]) -> Optional[str]:
     return dt_last.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def collect_statuses(cfg: Dict[str, Any]) -> List[Optional[str]]:
+def collect_statuses(cfg: Dict[str, Any]) -> List[str]:
     raw = cfg.get("acessorias", {}).get("statuses") or []
     if isinstance(raw, str):
         raw = [item.strip() for item in raw.split(",") if item.strip()]
-    if not raw:
-        return [None]
-    return [item or None for item in raw]
+    return [item for item in raw if item]
 
 
 def deduplicate_processes(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -165,20 +177,22 @@ def main() -> None:
     )
     statuses = collect_statuses(cfg)
 
-    log("fetch_api", "INFO", "Iniciando coleta", statuses=statuses, dt_last_dh=dt_last_dh)
-    collected: List[Dict[str, Any]] = []
-
-    for status in statuses:
-        try:
-            rows = client.list_processes(statuses=[status] if status else [None], dt_last_dh=dt_last_dh)
-            log("fetch_api", "INFO", "Página concluída", status=status or "ALL", count=len(rows))
-            collected.extend(rows)
-        except Exception as exc:
-            log("fetch_api", "ERROR", "Falha list_processes", status=status, error=str(exc))
-            raise
+    log(
+        "fetch_api",
+        "INFO",
+        "Iniciando coleta",
+        statuses=statuses if statuses else ["ALL"],
+        dt_last_dh=dt_last_dh,
+    )
+    try:
+        collected = client.list_processes(statuses=statuses or None, dt_last_dh=dt_last_dh)
+    except Exception as exc:
+        log("fetch_api", "ERROR", "Falha list_processes", error=str(exc))
+        raise
 
     if not collected:
-        log("fetch_api", "INFO", "Nenhum processo retornado")
+        scope = ",".join(statuses) if statuses else "ALL"
+        log("fetch_api", "INFO", f"0 processos (status={scope})")
 
     unique = deduplicate_processes(collected)
     normalized = normalize_rows(unique)
@@ -193,7 +207,7 @@ def main() -> None:
     output_path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
     log("fetch_api", "INFO", "Salvo api_processes.json", total=len(normalized))
 
-    now_utc = datetime.utcnow().replace(tzinfo=timezone.utc, microsecond=0).isoformat().replace("+00:00", "Z")
+    now_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     sync_state.setdefault("api", {})["last_sync"] = now_utc
     save_sync_state(sync_state)
     log("fetch_api", "INFO", "Atualizado sync", last_sync=now_utc)

@@ -31,14 +31,14 @@ Portal local para acompanhar obrigações, processos e alertas a partir da API A
 
 ```ini
 # API Acessórias
-ACESSORIAS_TOKEN=COLOQUE_SEU_TOKEN_AQUI
+ACESSORIAS_TOKEN=
 TZ=America/Sao_Paulo
 
 # E-mail (IMAP - KingHost)
 MAIL_HOST=imap.kinghost.net
 MAIL_PORT=993
 MAIL_USER=contabil2@netocontabilidade.com.br
-MAIL_PASSWORD=SUA_SENHA_OU_SENHA_DE_APP
+MAIL_PASSWORD=
 MAIL_USE_SSL=true
 MAIL_FOLDER=INBOX
 ```
@@ -54,14 +54,14 @@ MAIL_FOLDER=INBOX
     "base_url": "https://api.acessorias.com",
     "page_size": 20,
     "rate_budget": 90,
-    "statuses": ["A", "C"],
+    "statuses": [],
     "dt_last_dh": null
   },
   "deliveries": {
     "enabled": true,
     "identificador": "ListAll",
-    "days_back": 40,
-    "days_forward": 10,
+    "days_back": 120,
+    "days_forward": 0,
     "use_dt_last_dh": true
   },
   "deadlines": {
@@ -78,6 +78,31 @@ MAIL_FOLDER=INBOX
 - `statuses` controla quais `ProcStatus` serão buscados; a lista é percorrida status a status.
 - `rate_budget` (requisições por minuto) define o espaçamento entre páginas em todos os endpoints.
 - `deliveries.days_back/days_forward` geram uma janela diária para `deliveries/ListAll`, respeitando `DtLastDH` incremental com piso em ontem 00:00.
+
+## Primeiro run que traz dados
+
+Siga os passos abaixo em um terminal PowerShell para preparar o ambiente e executar a primeira coleta completa:
+
+```powershell
+cd "G:\- CONTABILIDADE -\Automação\Processos\Gestor_Neto_Contabilidade-main"
+py -m pip install --user --upgrade pip
+py -m pip install --user -r requirements.txt
+copy .env.template .env
+notepad .env  # preencha ACESSORIAS_TOKEN e MAIL_PASSWORD (quando necessário)
+.\run_all.bat
+```
+
+Após a execução:
+
+- Confirme que `data\events.json` possui tamanho maior que zero (Explorer ou `Get-Item data\events.json | Select-Object Length`).
+- Se o dashboard continuar vazio, verifique se `scripts/config.json` mantém `"statuses": []` e `deliveries.days_back = 120`. Esses valores ampliam a janela inicial e evitam respostas 204/filtradas.
+- Faça um teste rápido da API para validar o token:
+
+  ```powershell
+  iwr -UseBasicParsing -Headers @{ Authorization = "Bearer $env:ACESSORIAS_TOKEN" } -Uri "${env:ACESSORIAS_BASE_URL}/processes/ListAll*/?Pagina=1"
+  ```
+
+- Para IMAP, certifique-se de que o servidor `imap.kinghost.net` (porta 993/SSL) aceita a senha informada. Caso use senha de app, gere uma credencial exclusiva.
 
 ## Execução
 
@@ -142,5 +167,6 @@ Após `run_all.bat`, a pasta `data/` conterá (entre outros):
 | HTTP 204 | Tratado como página vazia; não interrompe a execução. |
 | HTTP 429 | O cliente aplica backoff exponencial (1s → 16s) e respeita `rate_budget`. Se persistir, reduza o orçamento. |
 | Falha IMAP | O passo é tolerante (não aborta). Confira host/porta/SSL no `.env`. |
+| Dashboard vazio / `events.json` zerado | Revise `ACESSORIAS_TOKEN`, confirme `scripts/config.json` com `"statuses": []` e `deliveries.days_back = 120`, então execute `.\run_all.bat` novamente. |
 | Última atualização não muda | Certifique-se de que `scripts.build_processes_kpis_alerts` gerou `data/meta.json` e recarregue o portal com o botão “Atualizar dados”. |
 

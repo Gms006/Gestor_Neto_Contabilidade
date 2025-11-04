@@ -37,6 +37,7 @@
   <main id="conteudo" class="max-w-7xl mx-auto px-4 py-6 space-y-8" tabindex="-1">
     <!-- DASHBOARD -->
     <section id="view-dashboard" class="view" role="tabpanel" aria-labelledby="tab-dashboard">
+      <div id="empty-dashboard" class="empty-state hidden" role="status" aria-live="polite"></div>
       <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-5" id="cards" aria-live="polite"></div>
       <div class="grid md:grid-cols-2 gap-6">
         <div class="panel">
@@ -61,6 +62,7 @@
     <!-- OBRIGAÇÕES -->
     <section id="view-obrigacoes" class="view hidden" role="tabpanel" aria-labelledby="tab-obrigacoes">
       <div class="sr-only" id="obrigacoes-help">Use os filtros para localizar obrigações por empresa, competência ou responsável.</div>
+      <div id="empty-obrig" class="empty-state hidden" role="status" aria-live="polite"></div>
       <div id="filters-obrig" class="filters" aria-describedby="obrigacoes-help"></div>
       <div id="table-obrig" class="table-wrap" role="region" aria-live="polite"></div>
       <div class="pager" id="pager-obrig"></div>
@@ -85,6 +87,7 @@
 
     <!-- EMPRESAS -->
     <section id="view-empresas" class="view hidden" role="tabpanel" aria-labelledby="tab-empresas">
+      <div id="empty-empresas" class="empty-state hidden" role="status" aria-live="polite"></div>
       <div class="mb-3">
         <label class="sr-only" for="q-emp">Buscar empresa ou CNPJ</label>
         <input id="q-emp" class="input" placeholder="🔎 Buscar empresa ou CNPJ" aria-label="Buscar empresa ou CNPJ" />

@@ -92,7 +92,8 @@ class AcessoriasClient:
                     log("acessorias_client", "ERROR", "json decode", error=str(exc))
                     raise
                 return data
-            return []
+            log("acessorias_client", "DEBUG", "endpoint_ok", url=url, count=len(data) if isinstance(data, list) else 1)
+            return data
         raise RuntimeError("Falha ao contactar API após múltiplas tentativas")
 
     # ------------------------------------------------------------------
@@ -113,13 +114,16 @@ class AcessoriasClient:
         self,
         statuses: Optional[Iterable[str]] = None,
         dt_last_dh: Optional[str] = None,
+        page_size: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        statuses = list(statuses or [None])
+        values = [s for s in (statuses or []) if s]
+        if not values:
+            values = [None]
         results: List[Dict[str, Any]] = []
-        for status in statuses:
+        for status in values:
             page = 1
             while True:
-                params: Dict[str, Any] = {"Pagina": page, "PageSize": self.page_size}
+                params: Dict[str, Any] = {"Pagina": page, "PageSize": page_size or self.page_size}
                 if status:
                     params["ProcStatus"] = status
                 if dt_last_dh:
@@ -131,6 +135,14 @@ class AcessoriasClient:
                     if payload is None:
                         continue
                     data = payload
+                    log(
+                        "acessorias_client",
+                        "DEBUG",
+                        "process_endpoint",
+                        status=status or "ALL",
+                        page=page,
+                        path=path,
+                    )
                     break
                 if data is None:
                     raise RuntimeError("Endpoints de processes não disponíveis (ListAll*/ / ListAll/)")
@@ -174,6 +186,7 @@ class AcessoriasClient:
         page_size: int = 50,
     ) -> List[Dict[str, Any]]:
         if identificador == "ListAll" and not dt_last_dh:
+            log("acessorias_client", "ERROR", "ListAll exige DtLastDH")
             raise ValueError("DtLastDH é obrigatório quando Identificador=ListAll")
         results: List[Dict[str, Any]] = []
         page = 1
@@ -205,6 +218,14 @@ class AcessoriasClient:
                         if isinstance(value, str):
                             record[key] = normalization.normalize_string(value)
             results.extend(normalized)
+            log(
+                "acessorias_client",
+                "DEBUG",
+                "deliveries_page",
+                identificador=identificador,
+                page=page,
+                count=len(normalized),
+            )
             page += 1
             time.sleep(self.sleep_seconds)
         return results

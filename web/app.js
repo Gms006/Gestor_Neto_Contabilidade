@@ -146,6 +146,48 @@ function exportCSV(headers, rows, filename = 'export.csv') {
   document.body.removeChild(a);
 }
 
+function setEmptyState(selector, show, content = '') {
+  const el = typeof selector === 'string' ? $(selector) : selector;
+  if (!el) return;
+  if (show) {
+    el.innerHTML = content;
+    el.classList.remove('hidden');
+  } else {
+    el.classList.add('hidden');
+    el.innerHTML = '';
+  }
+}
+
+function hasChartData(config) {
+  if (!config?.data) return false;
+  const datasets = Array.isArray(config.data.datasets) ? config.data.datasets : [];
+  const labels = Array.isArray(config.data.labels) ? config.data.labels : [];
+  if (labels.length && datasets.length === 0) return labels.length > 0;
+  return datasets.some((ds) =>
+    Array.isArray(ds.data) && ds.data.some((value) => {
+      if (value === null || value === undefined) return false;
+      const num = Number(value);
+      return !Number.isNaN(num) ? num !== 0 : String(value).trim() !== '';
+    }),
+  );
+}
+
+function summarizeCompanyTotals(companies) {
+  const totals = { entregues: 0, atrasadas: 0, proximos30: 0, futuras30: 0 };
+  let hasData = false;
+  (companies || []).forEach((company) => {
+    const counters = company?.counters?.totals || {};
+    Object.keys(totals).forEach((key) => {
+      const value = Number(counters[key] ?? 0);
+      if (!Number.isNaN(value) && value > 0) {
+        totals[key] += value;
+        hasData = true;
+      }
+    });
+  });
+  return hasData ? totals : null;
+}
+
 async function loadLocalConfig() {
   try {
     const res = await fetch('./config.local.json', { cache: 'no-store' });
@@ -161,7 +203,8 @@ async function refreshMeta(force = false) {
   const el = $('#lastUpdate');
   if (!el) return;
   try {
-    const meta = await loadJSON('../data/meta.json', { force });
+    const metaRaw = await loadJSON('../data/meta.json', { force });
+    const meta = metaRaw && !Array.isArray(metaRaw) ? metaRaw : {};
     const stamp = meta?.last_update_utc;
     if (!stamp) {
       el.textContent = 'Sem informações de atualização';
@@ -183,6 +226,23 @@ function registerChart(id, config) {
   state.charts[id]?.destroy?.();
   const canvas = document.getElementById(id.replace('#', '')) || document.querySelector(id);
   if (!canvas) return;
+  const parent = canvas.closest('.panel') || canvas.parentElement;
+  const existingPlaceholder = parent?.querySelector('.chart-empty');
+  if (existingPlaceholder) existingPlaceholder.remove();
+
+  const hasData = hasChartData(config);
+  if (!hasData) {
+    canvas.classList.add('hidden');
+    if (parent) {
+      const placeholder = document.createElement('div');
+      placeholder.className = 'empty-state chart-empty';
+      placeholder.textContent = 'Sem dados suficientes para gerar o gráfico.';
+      parent.appendChild(placeholder);
+    }
+    return;
+  }
+
+  canvas.classList.remove('hidden');
   state.charts[id] = new Chart(canvas, config);
 }
 
@@ -311,8 +371,22 @@ async function renderDashboard() {
   const events = await loadJSON('../data/events.json');
   await loadJSON('../data/kpis.json');
 
+  const hasEvents = Array.isArray(events) && events.length > 0;
+  let fallbackTotals = null;
+  if (!hasEvents) {
+    const companiesData = await loadJSON('../data/companies_obligations.json');
+    fallbackTotals = summarizeCompanyTotals(companiesData);
+  }
+
   const cards = $('#cards');
   if (cards) cards.innerHTML = '';
+  const fallbackMessage = !hasEvents
+    ? fallbackTotals
+      ? 'Sem eventos consolidados. Mostrando totais agregados a partir de companies_obligations.json.'
+      : 'Sem eventos consolidados no período atual. Execute a coleta e tente novamente.'
+    : '';
+  setEmptyState('#empty-dashboard', !hasEvents, fallbackMessage);
+
   const hoje = new Date();
   const ym = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
   const finalizadosMes = (proc || []).filter((p) => (p.conclusao || '').startsWith(ym)).length;
@@ -353,6 +427,34 @@ async function renderDashboard() {
     card('EFD Contrib (obrigatórias/dispensadas no mês)', `${efdOb} / ${efdDisp}`),
   );
 
+  if (fallbackTotals) {
+    const labels = [
+      ['entregues', 'Entregues'],
+      ['atrasadas', 'Atrasadas'],
+      ['proximos30', 'Próx. 30 dias'],
+      ['futuras30', 'Futuras 30+'],
+    ];
+    const grid = labels
+      .map(
+        ([key, label]) => `
+        <div>
+          <div class="text-xs text-slate-500">${label}</div>
+          <div class="text-xl font-semibold">${fallbackTotals[key] ?? 0}</div>
+        </div>
+      `,
+      )
+      .join('');
+    cards?.insertAdjacentHTML(
+      'beforeend',
+      `
+        <div class="panel">
+          <div class="text-sm text-slate-500 mb-2">Resumo de obrigações (companies_obligations.json)</div>
+          <div class="summary-grid">${grid}</div>
+        </div>
+      `,
+    );
+  }
+
   const compKeys = [...new Set((events || []).map((e) => e.competencia).filter(Boolean))].sort();
   const stackSeries = (cat) => {
     const obrig = compKeys.map((c) =>
@@ -369,6 +471,14 @@ async function renderDashboard() {
   };
   const reinf = stackSeries('efd_reinf');
   const efd = stackSeries('efd_contrib');
+
+  const difalMap = {};
+  (events || [])
+    .filter((e) => e.categoria === 'difal')
+    .forEach((e) => {
+      const key = e.subtipo || 'N/D';
+      difalMap[key] = (difalMap[key] || 0) + 1;
+    });
 
   const palette = ['#1d4ed8', '#0ea5e9', '#16a34a', '#f97316', '#0f172a'];
 
@@ -392,13 +502,6 @@ async function renderDashboard() {
   mkBar('#chReinf', reinf.labels, reinf.obrig, reinf.disp);
   mkBar('#chEfd', efd.labels, efd.obrig, efd.disp);
 
-  const difalMap = {};
-  (events || [])
-    .filter((e) => e.categoria === 'difal')
-    .forEach((e) => {
-      const key = e.subtipo || 'N/D';
-      difalMap[key] = (difalMap[key] || 0) + 1;
-    });
   registerChart('#chDifal', {
     type: 'doughnut',
     data: {
@@ -447,6 +550,35 @@ async function renderDashboard() {
 /* ----------------------- OBRIGAÇÕES (EVENTOS) ----------------------- */
 async function renderObrigacoes() {
   const events = await loadJSON('../data/events.json');
+  const hasEvents = Array.isArray(events) && events.length > 0;
+  let emptyContent = 'Sem dados de obrigações no momento. Execute a coleta ou ajuste os filtros.';
+  if (!hasEvents) {
+    const companiesData = await loadJSON('../data/companies_obligations.json');
+    const totals = summarizeCompanyTotals(companiesData);
+    if (totals) {
+      const labels = [
+        ['entregues', 'Entregues'],
+        ['atrasadas', 'Atrasadas'],
+        ['proximos30', 'Próx. 30 dias'],
+        ['futuras30', 'Futuras 30+'],
+      ];
+      const grid = labels
+        .map(
+          ([key, label]) => `
+          <div>
+            <div class="text-xs text-slate-500">${label}</div>
+            <div class="text-lg font-semibold">${totals[key] ?? 0}</div>
+          </div>
+        `,
+        )
+        .join('');
+      emptyContent = `
+        <p class="mb-3">Sem eventos de obrigações carregados. Mostrando totais agregados (companies_obligations.json).</p>
+        <div class="summary-grid">${grid}</div>
+      `;
+    }
+  }
+  setEmptyState('#empty-obrig', !hasEvents, emptyContent);
   const tab = 'obrigacoes';
   const uniq = (arr) => [...new Set(arr.filter(Boolean))].sort((a, b) => compareValues(a, b));
 
@@ -1009,16 +1141,16 @@ async function renderAlertas() {
 
   const build = () => {
     root.innerHTML = '';
-    const sn = sortByPrazo(alerts.sn_em_risco || []);
     const reinf = sortByPrazo(alerts.reinf_em_risco || []);
+    const efd = sortByPrazo(alerts.efd_contrib_em_risco || []);
     const bloq = sortByPrazo(alerts.bloqueantes || []);
 
     if (mode === 'all' || mode === 'risco') {
-      const cardSn = makeCard('SN em risco', sn, 'warn');
       const cardReinf = makeCard('REINF em risco', reinf, 'warn');
-      if (cardSn) root.appendChild(cardSn);
+      const cardEfd = makeCard('EFD Contrib em risco', efd, 'warn');
       if (cardReinf) root.appendChild(cardReinf);
-      if (!cardSn && !cardReinf) {
+      if (cardEfd) root.appendChild(cardEfd);
+      if (!cardReinf && !cardEfd) {
         const empty = document.createElement('p');
         empty.className = 'text-sm text-slate-500';
         empty.textContent = 'Nenhum alerta de risco no momento.';
@@ -1071,21 +1203,44 @@ async function renderEmpresas() {
     (byEmp[key] ||= { empresa: key, cnpj: p.cnpj, events: [], procs: [] }).procs.push(p);
   });
 
-  const companies = Object.values(byEmp).sort((a, b) => compareValues(a.empresa || '', b.empresa || ''));
+  let companies = Object.values(byEmp).sort((a, b) => compareValues(a.empresa || '', b.empresa || ''));
+  if (!companies.length) {
+    const companiesFallback = await loadJSON('../data/companies_obligations.json');
+    if (Array.isArray(companiesFallback) && companiesFallback.length) {
+      companies = companiesFallback.map((item) => ({
+        empresa: item?.empresa || item?.raw?.RazaoSocial || '(Sem nome)',
+        cnpj: item?.cnpj || item?.raw?.CNPJ,
+        events: [],
+        procs: [],
+        counters: item?.counters || {},
+      }));
+    }
+  }
+
+  setEmptyState(
+    '#empty-empresas',
+    companies.length === 0,
+    'Sem empresas disponíveis. Execute a coleta completa para preencher esta aba.',
+  );
+  if (!companies.length) {
+    box.innerHTML = '';
+    return;
+  }
 
   const computeKpi = (c) => {
-    const comps = [...new Set((c.events || []).map((e) => e.competencia).filter(Boolean))].sort();
-    const last3 = new Set(comps.slice(-3));
+    const competencias = [...new Set((c.events || []).map((e) => e.competencia).filter(Boolean))].sort();
+    const last3 = new Set(competencias.slice(-3));
     const count = (cat, status) =>
-      (c.events || []).filter(
-        (e) => e.categoria === cat && (!status || e.status === status) && last3.has(e.competencia),
-      ).length;
+      (c.events || []).filter((e) => {
+        if (e.categoria !== cat) return false;
+        if (status && e.status !== status) return false;
+        if (!last3.size) return true;
+        return last3.has(e.competencia);
+      }).length;
     const difal = (c.events || []).some((e) => e.categoria === 'difal');
     const fora = (c.events || []).some((e) => e.categoria === 'fora_das');
     const finalizados = (c.procs || []).filter((p) => p.conclusao).length;
-    const lt = (c.procs || [])
-      .map((p) => Number(p.dias_corridos || p.lead_time || 0))
-      .filter((n) => Number.isFinite(n) && n > 0);
+    const lt = (c.procs || []).map((p) => Number(p.dias_corridos || p.lead_time || 0)).filter((n) => Number.isFinite(n) && n > 0);
     const avg = lt.length ? Math.round(lt.reduce((a, b) => a + b, 0) / lt.length) : 0;
     return {
       reinf: `${count('efd_reinf', 'Obrigatória')} / ${count('efd_reinf', 'Dispensada')}`,
@@ -1094,6 +1249,7 @@ async function renderEmpresas() {
       fora,
       finalizados,
       avg,
+      counters: c.counters?.totals || null,
     };
   };
 
@@ -1121,6 +1277,12 @@ async function renderEmpresas() {
         const link = firstProc
           ? `<a class="btn-outline" href="https://app.acessorias.com/processes/${firstProc}" target="_blank" rel="noopener">Abrir no Acessórias</a>`
           : '<span class="text-xs text-slate-400">Sem ProcID disponível</span>';
+        const countersRow = kpi.counters
+          ? `<div class="md:col-span-6 col-span-2">
+              <div class="text-slate-500">Obrigações (entregues / atrasadas / próx. 30d / futuras)</div>
+              <div class="font-semibold">${kpi.counters.entregues ?? 0} / ${kpi.counters.atrasadas ?? 0} / ${kpi.counters.proximos30 ?? 0} / ${kpi.counters.futuras30 ?? 0}</div>
+            </div>`
+          : '';
         return `
           <div class="panel">
             <div class="flex items-center justify-between mb-3 gap-2">
@@ -1136,7 +1298,8 @@ async function renderEmpresas() {
               <div><div class="text-slate-500">DIFAL</div><div class="font-semibold">${kpi.difal ? 'Ativo' : '—'}</div></div>
               <div><div class="text-slate-500">Fora do DAS</div><div class="font-semibold">${kpi.fora ? 'Sim' : '—'}</div></div>
               <div><div class="text-slate-500">Processos concluídos</div><div class="font-semibold">${kpi.finalizados}</div></div>
-              <div><div class="text-slate-500">Lead time médio</div><div class="font-semibold">${kpi.avg} dias</div></div>
+              <div><div class="text-slate-500">Lead time médio</div><div class="font-semibold">${kpi.avg || '—'} dias</div></div>
+              ${countersRow}
             </div>
             <details class="mt-3">
               <summary class="cursor-pointer text-sm">Timeline (últimos 10 eventos)</summary>
@@ -1158,6 +1321,77 @@ async function renderEmpresas() {
 
   renderList(companies);
 }
+async function renderTab(tab) {
+  if (tab === 'dashboard') await renderDashboard();
+  if (tab === 'obrigacoes') await renderObrigacoes();
+  if (tab === 'processos') await renderProcessos();
+  if (tab === 'alertas') await renderAlertas();
+  if (tab === 'empresas') await renderEmpresas();
+}
+
+function bindTabs() {
+  $$('.tab').forEach((tabEl) => {
+    tabEl.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const tab = (tabEl.getAttribute('href') || '').replace('#tab=', '') || 'dashboard';
+      if (!state.filters[tab]) state.filters[tab] = readFilters(tab) || {};
+      syncHash(tab);
+      activateTab(tab);
+      renderTab(tab);
+    });
+  });
+  $('#btnRefresh')?.addEventListener('click', () => {
+    const btn = $('#btnRefresh');
+    if (!btn) return;
+    if (btn.dataset.loading === '1') return;
+    btn.dataset.loading = '1';
+    const original = btn.textContent;
+    btn.textContent = '⏳ Atualizando...';
+    btn.disabled = true;
+    (async () => {
+      try {
+        if (state.localConfig?.update_url) {
+          const res = await fetch(state.localConfig.update_url, { method: 'POST' });
+          if (!res.ok) throw new Error(`Falha ao chamar update (${res.status})`);
+        }
+        state.cache = {};
+        await renderTab(state.tab);
+        await refreshMeta(true);
+      } catch (err) {
+        console.error('Falha ao atualizar dados', err);
+        alert('Não foi possível atualizar os dados. Verifique o serviço local.');
+      } finally {
+        btn.dataset.loading = '0';
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    })();
+  });
+  window.addEventListener('hashchange', () => {
+    if (state.updatingHash) {
+      state.updatingHash = false;
+      return;
+    }
+    applyFromHash();
+  });
+}
+
+async function applyFromHash() {
+  const { tab, params } = getHashSnapshot();
+  state.hashParams = params;
+  activateTab(tab);
+  await renderTab(tab);
+}
+
+(async function start() {
+  state.localConfig = await loadLocalConfig();
+  await refreshMeta();
+  bindTabs();
+  if (!location.hash) {
+    history.replaceState(null, '', '#tab=dashboard');
+  }
+  await applyFromHash();
+})();
 async function renderTab(tab) {
   if (tab === 'dashboard') await renderDashboard();
   if (tab === 'obrigacoes') await renderObrigacoes();

@@ -1,6 +1,5 @@
 requests>=2.31,<3
 python-dateutil>=2.8.2,<3
 python-dotenv>=1.0,<2
-# (Opcional) servidor local p/ botão "Atualizar"
 Flask>=3.0,<4
 flask-cors>=4.0,<5

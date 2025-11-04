@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta, time
+from datetime import date, datetime, timedelta, time, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -102,15 +102,24 @@ def main() -> None:
     include_config = True
 
     aggregated: List[Dict[str, Any]] = []
+    days = daterange(days_back, days_forward)
+    if days:
+        range_start = days[0].strftime("%Y-%m-%d")
+        range_end = days[-1].strftime("%Y-%m-%d")
+    else:
+        range_start = range_end = date.today().strftime("%Y-%m-%d")
+
     log(
         "fetch_deliveries",
         "INFO",
         "Iniciando coleta",
         identificador=identificador,
         dt_last_dh=dt_last_dh,
-        dias=days_back + days_forward + 1,
+        dias=len(days) or 1,
+        range_inicio=range_start,
+        range_fim=range_end,
     )
-    for target_day in daterange(days_back, days_forward):
+    for target_day in days:
         day_str = target_day.strftime("%Y-%m-%d")
         log(
             "fetch_deliveries",
@@ -139,7 +148,7 @@ def main() -> None:
     OUTPUT.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
     log("fetch_deliveries", "INFO", "Salvo deliveries_raw.json", total=len(normalized))
 
-    now_utc = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    now_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     sync_state.setdefault("deliveries", {})["last_sync"] = now_utc
     save_sync_state(sync_state)
     log("fetch_deliveries", "INFO", "Atualizado sync", last_sync=now_utc)

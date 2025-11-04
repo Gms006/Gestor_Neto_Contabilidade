@@ -4,8 +4,10 @@ Lê e-mails via IMAP (KingHost), extrai eventos padronizados e grava data/events
 Depende de variáveis de ambiente (.env) e de scripts/config.json (bloco imap).
 """
 
-import os, json, imaplib, email, re
+import os, json, imaplib, re
+from email import message_from_bytes
 from email.header import decode_header, make_header
+from email.message import Message
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -36,7 +38,7 @@ def decode_subj(raw) -> str:
         return raw or ""
 
 
-def get_text_message(msg: email.message.Message) -> str:
+def get_text_message(msg: Message) -> str:
     if msg.is_multipart():
         for part in msg.walk():
             ctype = part.get_content_type()
@@ -159,7 +161,7 @@ def main():
         if typ != "OK" or not msg_data or not msg_data[0]:
             continue
         raw = msg_data[0][1]
-        msg = email.message_from_bytes(raw)
+        msg = message_from_bytes(raw)
 
         subj = decode_subj(msg.get("Subject", ""))
         from_addr = str(make_header(decode_header(msg.get("From", ""))))

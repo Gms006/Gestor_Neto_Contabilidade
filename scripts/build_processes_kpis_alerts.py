@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter, defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from statistics import mean
 from typing import Any, Dict, Iterable, List, Optional
@@ -84,6 +84,18 @@ def obligations_counters(events: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         "by_subtipo": dict(by_subtipo),
         "by_status": dict(by_status),
     }
+
+
+def aggregate_company_totals(companies: Iterable[Dict[str, Any]]) -> Dict[str, int]:
+    totals: defaultdict[str, int] = defaultdict(int)
+    for company in companies:
+        counters = (company or {}).get("counters", {}).get("totals", {})
+        for key, value in counters.items():
+            try:
+                totals[key] += int(value or 0)
+            except (TypeError, ValueError):
+                continue
+    return dict(totals)
 
 
 def process_status_counts(processes: Iterable[Dict[str, Any]]) -> Dict[str, int]:
@@ -181,6 +193,18 @@ def build_alerts(events: Iterable[Dict[str, Any]], cfg: Dict[str, Any]) -> Dict[
         "efd_contrib_em_risco": efd_alerts,
         "bloqueantes": bloqueantes,
     }
+    for company in companies:
+        counters = (company or {}).get("counters", {}).get("totals", {})
+        for key in totals:
+            totals[key] += int(counters.get(key, 0) or 0)
+    kpis.setdefault("companies", {})["obligations_totals"] = totals
+
+
+def main() -> None:
+    cfg = load_config()
+    api_rows = load_json(API_FILE)
+    events = load_json(EVENTS_FILE)
+    companies = load_json(COMPANIES_FILE)
 
 
 def enrich_with_companies(kpis: Dict[str, Any], companies: Iterable[Dict[str, Any]]) -> None:
@@ -208,21 +232,26 @@ def main() -> None:
     processes = build_processes(api_rows)
     PROC_OUT.write_text(json.dumps(processes, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    obligations_data = obligations_counters(events)
     kpis = {
         "processes": {
             "by_status": process_status_counts(processes),
             "avg_days_concluded": average_days_concluded(processes),
         },
-        "obligations": obligations_counters(events),
+        "obligations": obligations_data,
     }
     enrich_with_companies(kpis, companies)
+    if not events:
+        fallback = aggregate_company_totals(companies)
+        if fallback:
+            obligations_data["totals"] = fallback
     KPI_FILE.write_text(json.dumps(kpis, ensure_ascii=False, indent=2), encoding="utf-8")
 
     alerts = build_alerts(events, cfg)
     ALERTS_FILE.write_text(json.dumps(alerts, ensure_ascii=False, indent=2), encoding="utf-8")
 
     meta = {
-        "last_update_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "last_update_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "counts": {
             "processes": len(processes),
             "events": len(events),
