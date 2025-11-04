@@ -29,6 +29,55 @@ def load_config() -> Dict[str, Any]:
 def ensure_dirs() -> None:
     DATA.mkdir(exist_ok=True)
     RAW_API.mkdir(exist_ok=True)
+    for path in RAW_API.glob("process_*.json"):
+        try:
+            path.unlink()
+        except OSError:
+            logger.warning("Não foi possível remover %s", path)
+
+
+def load_sync_state() -> Dict[str, Any]:
+    if SYNC_STATE.exists():
+        with open(SYNC_STATE, "r", encoding="utf-8") as fp:
+            try:
+                return json.load(fp)
+            except json.JSONDecodeError:
+                logger.warning("Arquivo .sync_state.json inválido, reiniciando controles.")
+    return {}
+
+
+def save_sync_state(state: Dict[str, Any]) -> None:
+    with open(SYNC_STATE, "w", encoding="utf-8") as fp:
+        json.dump(state, fp, ensure_ascii=False, indent=2)
+
+
+def _to_dt(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return parser.parse(value)
+    except (parser.ParserError, TypeError, ValueError):
+        return None
+
+
+def compute_dt_last_dh(last_value: Optional[str]) -> Optional[str]:
+    dt_last = _to_dt(last_value)
+    if not dt_last:
+        return None
+    dt_last = dt_last - timedelta(minutes=5)
+    dt_last = dt_last.replace(microsecond=0)
+    return dt_last.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def collect_statuses(cfg: Dict[str, Any]) -> List[Optional[str]]:
+    acessorias = cfg.get("acessorias", {})
+    statuses: Iterable[Any] = acessorias.get("status_filters") or acessorias.get("proc_status") or []
+    if isinstance(statuses, str):
+        statuses = [s.strip() for s in statuses.split(",") if s.strip()]
+    statuses_list = [s if s else None for s in statuses]
+    if not statuses_list:
+        return [None]
+    return list(statuses_list)
 
 
 def load_sync_state() -> Dict[str, Any]:
@@ -151,4 +200,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("fetch_api falhou: %s", exc)
+        raise
