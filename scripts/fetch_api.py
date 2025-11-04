@@ -1,18 +1,17 @@
-# -*- coding: utf-8 -*-
-"""Busca incremental de processos na API do Acessórias com paginação resiliente."""
+"""Fetch processes from Acessórias with incremental DtLastDH control."""
 from __future__ import annotations
 
 import json
 from collections import OrderedDict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from dateutil import parser
 from dotenv import load_dotenv
 
-from scripts.acessorias_client import get_process_detail, list_processes
-from scripts.utils.logger import setup_logger
+from scripts.acessorias_client import AcessoriasClient
+from scripts.utils.logger import log
 from scripts.utils.normalization import normalize_structure
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,21 +20,10 @@ RAW_API = DATA / "raw_api"
 CONFIG_PATH = ROOT / "scripts" / "config.json"
 SYNC_STATE = DATA / ".sync_state.json"
 
-logger = setup_logger("fetch_api")
-
-STATUS_MAP = {
-    "A": "EM ANDAMENTO",
-    "C": "CONCLUÍDO",
-    "F": "FINALIZADO",
-    "P": "PENDENTE",
-    "R": "REJEITADO",
-    "S": "SUSPENSO",
-}
-
 
 def load_config() -> Dict[str, Any]:
-    with open(CONFIG_PATH, "r", encoding="utf-8") as fp:
-        return json.load(fp)
+    with open(CONFIG_PATH, "r", encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 def ensure_dirs() -> None:
@@ -92,88 +80,123 @@ def collect_statuses(cfg: Dict[str, Any]) -> List[Optional[str]]:
     return list(statuses_list)
 
 
+def load_sync_state() -> Dict[str, Any]:
+    if SYNC_STATE.exists():
+        try:
+            return json.loads(SYNC_STATE.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            log("fetch_api", "WARNING", "sync_state inválido, reiniciando")
+    return {}
+
+
+def save_sync_state(state: Dict[str, Any]) -> None:
+    SYNC_STATE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def compute_dt_last_dh(last_value: Optional[str]) -> Optional[str]:
+    if not last_value:
+        return None
+    try:
+        dt_last = parser.isoparse(last_value)
+    except (ValueError, TypeError, parser.ParserError):
+        return None
+    dt_last = dt_last - timedelta(minutes=5)
+    dt_last = dt_last.astimezone(timezone.utc).replace(microsecond=0)
+    return dt_last.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def collect_statuses(cfg: Dict[str, Any]) -> List[Optional[str]]:
+    raw = cfg.get("acessorias", {}).get("statuses") or []
+    if isinstance(raw, str):
+        raw = [item.strip() for item in raw.split(",") if item.strip()]
+    if not raw:
+        return [None]
+    return [item or None for item in raw]
+
+
 def deduplicate_processes(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     ordered: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
     for row in rows:
         pid = str(row.get("ProcID") or row.get("ProcId") or row.get("proc_id") or "").strip()
-        if pid:
-            ordered[pid] = row
-        else:
-            ordered[f"_idx_{len(ordered)}"] = row
+        key = pid or f"_idx_{len(ordered)}"
+        ordered[key] = row
     return list(ordered.values())
-
-
-def enrich_with_details(proc: Dict[str, Any]) -> Dict[str, Any]:
-    if proc.get("ProcPassos"):
-        return proc
-    pid = proc.get("ProcID") or proc.get("ProcId")
-    if not pid:
-        return proc
-    try:
-        detail = get_process_detail(pid)
-        merged = {**detail, **proc}
-        return merged
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Falha ao obter detalhe %s: %s", pid, exc)
-        return proc
 
 
 def apply_status_label(proc: Dict[str, Any]) -> Dict[str, Any]:
     status_code = proc.get("ProcStatus") or proc.get("proc_status")
+    mapping = {
+        "A": "EM ANDAMENTO",
+        "C": "CONCLUÍDO",
+        "F": "FINALIZADO",
+        "P": "PENDENTE",
+        "R": "REJEITADO",
+        "S": "SUSPENSO",
+    }
     if isinstance(status_code, str):
-        label = STATUS_MAP.get(status_code.upper())
+        label = mapping.get(status_code.upper())
         if label:
             proc["ProcStatusLabel"] = label
     return proc
 
 
+def normalize_rows(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for row in rows:
+        data = normalize_structure(row)
+        normalized.append(apply_status_label(data))
+    return normalized
+
+
 def main() -> None:
     load_dotenv()
     ensure_dirs()
+
     cfg = load_config()
     sync_state = load_sync_state()
-    last_dh = (sync_state.get("api") or {}).get("processes_last_dh")
-    dt_last_dh = compute_dt_last_dh(last_dh)
+    last_sync = (sync_state.get("api") or {}).get("last_sync")
+    dt_last_dh = compute_dt_last_dh(last_sync)
 
-    statuses = collect_statuses(cfg)
-    logger.info(
-        "[fetch_api] Coletando processos (statuses=%s, dt_last_dh=%s)...",
-        statuses,
-        dt_last_dh,
+    acessorias_cfg = cfg.get("acessorias", {})
+    client = AcessoriasClient(
+        base_url=acessorias_cfg.get("base_url"),
+        page_size=int(acessorias_cfg.get("page_size", 20)),
+        rate_budget=int(acessorias_cfg.get("rate_budget", 90)),
     )
+    statuses = collect_statuses(cfg)
 
+    log("fetch_api", "INFO", "Iniciando coleta", statuses=statuses, dt_last_dh=dt_last_dh)
     collected: List[Dict[str, Any]] = []
+
     for status in statuses:
         try:
-            rows = list_processes(status=status, dt_last_dh=dt_last_dh)
-            logger.info("Status %s -> %d registros", status or "ALL", len(rows))
+            rows = client.list_processes(statuses=[status] if status else [None], dt_last_dh=dt_last_dh)
+            log("fetch_api", "INFO", "Página concluída", status=status or "ALL", count=len(rows))
             collected.extend(rows)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Erro list_processes(status=%s): %s", status, exc)
+        except Exception as exc:
+            log("fetch_api", "ERROR", "Falha list_processes", status=status, error=str(exc))
             raise
 
-    unique = deduplicate_processes(collected)
-    logger.info("Total consolidado após deduplicação: %d", len(unique))
+    if not collected:
+        log("fetch_api", "INFO", "Nenhum processo retornado")
 
-    enriched: List[Dict[str, Any]] = []
-    for idx, proc in enumerate(unique, start=1):
-        merged = enrich_with_details(proc)
-        normalized = normalize_structure(merged)
-        normalized = apply_status_label(normalized)
-        enriched.append(normalized)
+    unique = deduplicate_processes(collected)
+    normalized = normalize_rows(unique)
+
+    for idx, item in enumerate(normalized, start=1):
         (RAW_API / f"process_{idx:05d}.json").write_text(
-            json.dumps(normalized, ensure_ascii=False, indent=2),
+            json.dumps(item, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
     output_path = DATA / "api_processes.json"
-    output_path.write_text(json.dumps(enriched, ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info("[fetch_api] OK: %s", output_path)
+    output_path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    log("fetch_api", "INFO", "Salvo api_processes.json", total=len(normalized))
 
-    now_utc = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-    sync_state.setdefault("api", {})["processes_last_dh"] = now_utc
+    now_utc = datetime.utcnow().replace(tzinfo=timezone.utc, microsecond=0).isoformat().replace("+00:00", "Z")
+    sync_state.setdefault("api", {})["last_sync"] = now_utc
     save_sync_state(sync_state)
-    logger.info("[fetch_api] Atualizado processes_last_dh -> %s", now_utc)
+    log("fetch_api", "INFO", "Atualizado sync", last_sync=now_utc)
 
 
 if __name__ == "__main__":

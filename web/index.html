@@ -13,8 +13,11 @@
 <body class="bg-slate-50 text-slate-800">
   <a href="#conteudo" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:bg-white focus:px-3 focus:py-2 focus:rounded">Pular para o conteúdo</a>
   <header class="bg-white border-b sticky top-0 z-30 shadow-sm">
-    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
-      <h1 class="text-xl font-semibold tracking-tight">Gestor — Portal Operacional</h1>
+    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+      <div>
+        <h1 class="text-xl font-semibold tracking-tight">Gestor — Portal Operacional</h1>
+        <p id="lastUpdate" class="text-sm text-slate-500" aria-live="polite"></p>
+      </div>
       <div class="flex gap-2">
         <button id="btnRefresh" class="btn" type="button" aria-label="Atualizar dados">🔄 Atualizar dados</button>
         <a class="btn-outline" href="../README.md" target="_blank" rel="noopener">Ajuda</a>

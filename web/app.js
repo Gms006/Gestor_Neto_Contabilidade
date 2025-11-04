@@ -12,14 +12,15 @@ const state = {
   pageSize: {},
   hashParams: new URLSearchParams(),
   updatingHash: false,
+  localConfig: null,
 };
 
 const PAGE_SIZES = [50, 100, 200];
 const PAGE_SIZE_DEFAULT = 100;
 const ROW_CHUNK = 40;
 
-async function loadJSON(path) {
-  if (state.cache[path]) return state.cache[path];
+async function loadJSON(path, { force = false } = {}) {
+  if (!force && state.cache[path]) return state.cache[path];
   try {
     const data = await fetch(path, { cache: 'no-store' }).then((r) => r.json());
     state.cache[path] = data;
@@ -143,6 +144,39 @@ function exportCSV(headers, rows, filename = 'export.csv') {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+}
+
+async function loadLocalConfig() {
+  try {
+    const res = await fetch('./config.local.json', { cache: 'no-store' });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    console.warn('Sem config.local.json', err);
+    return null;
+  }
+}
+
+async function refreshMeta(force = false) {
+  const el = $('#lastUpdate');
+  if (!el) return;
+  try {
+    const meta = await loadJSON('../data/meta.json', { force });
+    const stamp = meta?.last_update_utc;
+    if (!stamp) {
+      el.textContent = 'Sem informações de atualização';
+      return;
+    }
+    const date = new Date(stamp);
+    if (Number.isNaN(date.getTime())) {
+      el.textContent = `Atualizado em ${stamp}`;
+      return;
+    }
+    el.textContent = `Atualizado em ${date.toLocaleString('pt-BR', { hour12: false })}`;
+  } catch (err) {
+    console.warn('Falha ao ler meta.json', err);
+    el.textContent = 'Sem informações de atualização';
+  }
 }
 
 function registerChart(id, config) {
@@ -1144,8 +1178,31 @@ function bindTabs() {
     });
   });
   $('#btnRefresh')?.addEventListener('click', () => {
-    state.cache = {};
-    renderTab(state.tab);
+    const btn = $('#btnRefresh');
+    if (!btn) return;
+    if (btn.dataset.loading === '1') return;
+    btn.dataset.loading = '1';
+    const original = btn.textContent;
+    btn.textContent = '⏳ Atualizando...';
+    btn.disabled = true;
+    (async () => {
+      try {
+        if (state.localConfig?.update_url) {
+          const res = await fetch(state.localConfig.update_url, { method: 'POST' });
+          if (!res.ok) throw new Error(`Falha ao chamar update (${res.status})`);
+        }
+        state.cache = {};
+        await renderTab(state.tab);
+        await refreshMeta(true);
+      } catch (err) {
+        console.error('Falha ao atualizar dados', err);
+        alert('Não foi possível atualizar os dados. Verifique o serviço local.');
+      } finally {
+        btn.dataset.loading = '0';
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    })();
   });
   window.addEventListener('hashchange', () => {
     if (state.updatingHash) {
@@ -1164,6 +1221,8 @@ async function applyFromHash() {
 }
 
 (async function start() {
+  state.localConfig = await loadLocalConfig();
+  await refreshMeta();
   bindTabs();
   if (!location.hash) {
     history.replaceState(null, '', '#tab=dashboard');
