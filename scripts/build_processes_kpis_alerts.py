@@ -193,6 +193,18 @@ def build_alerts(events: Iterable[Dict[str, Any]], cfg: Dict[str, Any]) -> Dict[
         "efd_contrib_em_risco": efd_alerts,
         "bloqueantes": bloqueantes,
     }
+    for company in companies:
+        counters = (company or {}).get("counters", {}).get("totals", {})
+        for key in totals:
+            totals[key] += int(counters.get(key, 0) or 0)
+    kpis.setdefault("companies", {})["obligations_totals"] = totals
+
+
+def main() -> None:
+    cfg = load_config()
+    api_rows = load_json(API_FILE)
+    events = load_json(EVENTS_FILE)
+    companies = load_json(COMPANIES_FILE)
 
 
 def enrich_with_companies(kpis: Dict[str, Any], companies: Iterable[Dict[str, Any]]) -> None:
