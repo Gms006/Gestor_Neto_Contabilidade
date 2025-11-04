@@ -1,51 +1,172 @@
 # Sistema de Gestão Operacional Fiscal
 
-Sistema para consolidação de dados da API Acessórias e e-mails padronizados.
+Portal local para acompanhar obrigações, processos e alertas a partir da API Acessórias, entregas (deliveries) e e-mails padronizados.
+
+## Pré-requisitos
+
+- Windows com Python 3.10, 3.11, 3.12 ou 3.13 instalado (`py --version`).
+- Token válido para a API Acessórias.
+- Credenciais de e-mail IMAP (KingHost) quando a ingestão de mensagens estiver habilitada.
 
 ## Instalação
 
-1. Crie ambiente virtual:
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-```
+1. (Opcional) Crie e ative um ambiente virtual:
+   ```powershell
+   py -m venv .venv
+   .\.venv\Scripts\activate
+   ```
 
-2. Instale dependências:
-```bash
-pip install -r requirements.txt
-```
+2. Instale as dependências Python (sem pacotes pesados):
+   ```powershell
+   py -m pip install --user -r requirements.txt
+   ```
 
-3. Configure credenciais:
-   - Copie `.env.template` para `.env`
-   - Preencha `ACESSORIAS_TOKEN`
-   - Coloque `credentials.json` do Gmail na raiz
+3. Copie o arquivo `.env.template` para `.env` e preencha as variáveis obrigatórias (veja abaixo).
 
-4. Execute:
-```bash
-run_all.bat
-```
-
-5. Abra o dashboard:
-   - Navegador: `web\index.html`
-
-## Estrutura
-
-- `scripts/` - Scripts Python de coleta e processamento
-- `data/` - Dados gerados (JSON)
-- `web/` - Interface HTML/JS
-- `tests/` - Amostras e testes
+4. Ajuste `scripts/config.json` se precisar alterar filtros de status ou janelas de entregas.
 
 ## Configuração
 
-- `scripts/config.json` - Endpoints, prazos, queries
-- `scripts/rules.json` - Mapeamento de passos para categorias
-- `.env` - Tokens e credenciais (NÃO COMMITAR)
+### Variáveis de ambiente (`.env`)
 
-## Funcionamento
+```ini
+# API Acessórias
+ACESSORIAS_TOKEN=
+TZ=America/Sao_Paulo
 
-1. `fetch_api.py` - Busca processos da API Acessórias
-2. `flatten_steps.py` - Extrai eventos dos passos
-3. `fetch_email.py` - Busca e-mails do Gmail
-4. `fuse_sources.py` - Mescla API + email
-5. `build_processes_kpis_alerts.py` - Gera KPIs e alertas
-6. `web/index.html` - Visualiza dashboards
+# E-mail (IMAP - KingHost)
+MAIL_HOST=imap.kinghost.net
+MAIL_PORT=993
+MAIL_USER=contabil2@netocontabilidade.com.br
+MAIL_PASSWORD=
+MAIL_USE_SSL=true
+MAIL_FOLDER=INBOX
+```
+
+- `ACESSORIAS_BASE_URL` é opcional caso utilize outro ambiente.
+- As credenciais de IMAP são usadas pelo `scripts.fetch_email_imap` (execução tolerante a falhas).
+
+### `scripts/config.json`
+
+```json
+{
+  "acessorias": {
+    "base_url": "https://api.acessorias.com",
+    "page_size": 20,
+    "rate_budget": 90,
+    "statuses": [],
+    "dt_last_dh": null
+  },
+  "deliveries": {
+    "enabled": true,
+    "identificador": "ListAll",
+    "days_back": 120,
+    "days_forward": 0,
+    "use_dt_last_dh": true
+  },
+  "deadlines": {
+    "reinf_day": 15,
+    "efd_contrib_day": 20,
+    "risk_window_days": 5
+  },
+  "imap": {
+    "search_days": 180
+  }
+}
+```
+
+- `statuses` controla quais `ProcStatus` serão buscados; a lista é percorrida status a status.
+- `rate_budget` (requisições por minuto) define o espaçamento entre páginas em todos os endpoints.
+- `deliveries.days_back/days_forward` geram uma janela diária para `deliveries/ListAll`, respeitando `DtLastDH` incremental com piso em ontem 00:00.
+
+## Primeiro run que traz dados
+
+Siga os passos abaixo em um terminal PowerShell para preparar o ambiente e executar a primeira coleta completa:
+
+```powershell
+cd "G:\- CONTABILIDADE -\Automação\Processos\Gestor_Neto_Contabilidade-main"
+py -m pip install --user --upgrade pip
+py -m pip install --user -r requirements.txt
+copy .env.template .env
+notepad .env  # preencha ACESSORIAS_TOKEN e MAIL_PASSWORD (quando necessário)
+.\run_all.bat
+```
+
+Após a execução:
+
+- Confirme que `data\events.json` possui tamanho maior que zero (Explorer ou `Get-Item data\events.json | Select-Object Length`).
+- Se o dashboard continuar vazio, verifique se `scripts/config.json` mantém `"statuses": []` e `deliveries.days_back = 120`. Esses valores ampliam a janela inicial e evitam respostas 204/filtradas.
+- Faça um teste rápido da API para validar o token:
+
+  ```powershell
+  iwr -UseBasicParsing -Headers @{ Authorization = "Bearer $env:ACESSORIAS_TOKEN" } -Uri "${env:ACESSORIAS_BASE_URL}/processes/ListAll*/?Pagina=1"
+  ```
+
+- Para IMAP, certifique-se de que o servidor `imap.kinghost.net` (porta 993/SSL) aceita a senha informada. Caso use senha de app, gere uma credencial exclusiva.
+
+## Execução
+
+### Coleta completa
+
+PowerShell:
+```powershell
+.\run_all.bat
+```
+
+Prompt (CMD):
+```cmd
+run_all.bat
+```
+
+### Incremental rápido
+
+PowerShell:
+```powershell
+.\run_incremental.bat
+```
+
+O fluxo executa, em ordem:
+1. `scripts.fetch_api` (processos, incremental via `DtLastDH`).
+2. `scripts.fetch_deliveries` (loop diário e `DtLastDH`).
+3. `scripts.fetch_companies` (obrigações agregadas por empresa).
+4. `scripts.flatten_steps` (eventos de processos + obrigações).
+5. `scripts.fetch_email_imap` (tolerante a falhas).
+6. `scripts.fuse_sources` (dedup e prioridade por fonte).
+7. `scripts.build_processes_kpis_alerts` (processos normalizados, KPIs, alertas, `meta.json`).
+
+Logs estruturados são gravados em `data/logs.txt` (`ts;component;level;msg;extra`).
+
+## Dados gerados
+
+Após `run_all.bat`, a pasta `data/` conterá (entre outros):
+
+- `api_processes.json` — snapshot bruto dos processos com normalização de datas/CNPJ.
+- `deliveries_raw.json` — entregas coletadas diariamente, incluindo blocos `config`.
+- `companies_obligations.json` — obrigações agregadas por empresa (entregues, atrasadas, próximos 30 dias, futuras).
+- `events_api.json` — eventos combinando passos de processos e obrigações (categoria `process_step`/`obrigacao`).
+- `events_email.json` — eventos extraídos de e-mails (quando disponíveis).
+- `events.json` — fusão deduplicada (prioriza API para obrigações e e-mail para mensagens tipo MIT/dispensa/confirmação).
+- `processes.json`, `kpis.json`, `alerts.json` — insumos diretos do portal.
+- `meta.json` — contém `last_update_utc` e contagens de itens para exibir no cabeçalho do site.
+- `.sync_state.json` — controles incrementais (`api.last_sync`, `deliveries.last_sync`, etc.).
+
+## Portal Web (web/)
+
+- Abra `web/index.html` em qualquer navegador moderno. O layout usa Tailwind via CDN e possui CSS local de fallback.
+- O cabeçalho exibe “Atualizado em …” lendo `data/meta.json`. O botão “🔄 Atualizar dados” limpa o cache em memória e, opcionalmente, chama um endpoint local se existir `web/config.local.json` com `{ "update_url": "http://127.0.0.1:8765/update" }`.
+- As abas Dashboard, Obrigações, Processos, Alertas e Empresas oferecem busca, filtros, ordenação, paginação (50/100/200 itens) e exportação CSV. Pressionar **Enter** em campos de busca aciona o filtro.
+- Filtros e paginação são persistidos por aba em `localStorage`. A URL usa hash (`#tab=...`) para restaurar a navegação.
+- Para demonstrações sem rodar a pipeline, copie manualmente os arquivos de `data-samples/` para `data/` antes de abrir o site.
+
+## Troubleshooting
+
+| Sintoma | Como tratar |
+| --- | --- |
+| HTTP 401/403 | Verifique `ACESSORIAS_TOKEN` e permissões do usuário. |
+| HTTP 404 nos endpoints `ListAll*/` | A API pode não expor a variante com `*`; o cliente tenta `ListAll/` automaticamente, mas se todas falharem revise a instalação. |
+| HTTP 204 | Tratado como página vazia; não interrompe a execução. |
+| HTTP 429 | O cliente aplica backoff exponencial (1s → 16s) e respeita `rate_budget`. Se persistir, reduza o orçamento. |
+| Falha IMAP | O passo é tolerante (não aborta). Confira host/porta/SSL no `.env`. |
+| Dashboard vazio / `events.json` zerado | Revise `ACESSORIAS_TOKEN`, confirme `scripts/config.json` com `"statuses": []` e `deliveries.days_back = 120`, então execute `.\run_all.bat` novamente. |
+| Última atualização não muda | Certifique-se de que `scripts.build_processes_kpis_alerts` gerou `data/meta.json` e recarregue o portal com o botão “Atualizar dados”. |
+

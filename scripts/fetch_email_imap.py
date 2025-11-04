@@ -4,12 +4,16 @@ Lê e-mails via IMAP (KingHost), extrai eventos padronizados e grava data/events
 Depende de variáveis de ambiente (.env) e de scripts/config.json (bloco imap).
 """
 
-import os, json, imaplib, email, re
+import os, json, imaplib, re
+from email import message_from_bytes
 from email.header import decode_header, make_header
+from email.message import Message
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
+
+from scripts.utils.logger import log
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
@@ -34,7 +38,7 @@ def decode_subj(raw) -> str:
         return raw or ""
 
 
-def get_text_message(msg: email.message.Message) -> str:
+def get_text_message(msg: Message) -> str:
     if msg.is_multipart():
         for part in msg.walk():
             ctype = part.get_content_type()
@@ -129,10 +133,14 @@ def main():
     subject_kw     = cfg.get("imap", {}).get("subject_keywords", [])
     from_filters   = cfg.get("imap", {}).get("from_filters", [])
 
+    log("fetch_email_imap", "INFO", "Conectando", host=host, folder=folder)
+
     M = imaplib.IMAP4_SSL(host, port) if use_ssl else imaplib.IMAP4(host, port)
     if not use_ssl:
-        try: M.starttls()
-        except Exception: pass
+        try:
+            M.starttls()
+        except Exception as exc:
+            log("fetch_email_imap", "WARNING", "STARTTLS indisponível", error=str(exc))
 
     M.login(user, pwd)
     M.select(folder)
@@ -146,13 +154,14 @@ def main():
     ids = ids[-max_messages:]
 
     events: List[Dict[str, Any]] = []
+    log("fetch_email_imap", "INFO", "Processando mensagens", total=len(ids))
 
     for num in reversed(ids):
         typ, msg_data = M.fetch(num, "(RFC822)")
         if typ != "OK" or not msg_data or not msg_data[0]:
             continue
         raw = msg_data[0][1]
-        msg = email.message_from_bytes(raw)
+        msg = message_from_bytes(raw)
 
         subj = decode_subj(msg.get("Subject", ""))
         from_addr = str(make_header(decode_header(msg.get("From", ""))))
@@ -206,7 +215,7 @@ def main():
     M.logout()
 
     OUT.write_text(json.dumps(events, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[fetch_email_imap] OK: {OUT} ({len(events)} eventos)")
+    log("fetch_email_imap", "INFO", "Eventos gerados", total=len(events))
 
 
 if __name__ == "__main__":
