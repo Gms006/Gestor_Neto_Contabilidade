@@ -17,15 +17,20 @@ pip install -r requirements.txt
 
 3. Configure credenciais:
    - Copie `.env.template` para `.env`
-   - Preencha `ACESSORIAS_TOKEN`
+   - Preencha `ACESSORIAS_TOKEN` (obrigatório) e, se necessário, `ACESSORIAS_BASE_URL` / `ACESSORIAS_RATE_SLEEP`
    - Coloque `credentials.json` do Gmail na raiz
 
-4. Execute:
+4. Execute a coleta completa:
 ```bash
 run_all.bat
 ```
 
-5. Abra o dashboard:
+5. Para incrementais rápidos (usa `.sync_state.json` como referência):
+```bash
+run_incremental.bat
+```
+
+6. Abra o dashboard:
    - Navegador: `web\index.html`
 
 ## Estrutura
@@ -37,18 +42,33 @@ run_all.bat
 
 ## Configuração
 
-- `scripts/config.json` - Endpoints, prazos, queries
+- `scripts/config.json` - Endpoints, filtros de status, janelas de Deliveries/Invoices
 - `scripts/rules.json` - Mapeamento de passos para categorias
 - `.env` - Tokens e credenciais (NÃO COMMITAR)
+- `data/.sync_state.json` - Controle incremental por endpoint
+
+### Variáveis de ambiente (.env)
+
+- `ACESSORIAS_TOKEN` — obrigatório para autenticar na API.
+- `ACESSORIAS_BASE_URL` — opcional para apontar para outro ambiente da API.
+- `ACESSORIAS_RATE_SLEEP` — opcional, tempo (segundos) entre páginas para respeitar o rate limit.
 
 ## Funcionamento
 
-1. `fetch_api.py` - Busca processos da API Acessórias
-2. `flatten_steps.py` - Extrai eventos dos passos
-3. `fetch_email.py` - Busca e-mails do Gmail
-4. `fuse_sources.py` - Mescla API + email
-5. `build_processes_kpis_alerts.py` - Gera KPIs e alertas
-6. `web/index.html` - Visualiza dashboards
+1. `fetch_api.py` - Busca processos da API Acessórias (incremental por `ProcStatus` com fallback e paginação)
+2. `fetch_deliveries.py` - Busca entregas (`deliveries`) respeitando janela de datas e `DtLastDH`
+3. `flatten_steps.py` - Extrai eventos dos passos
+4. `fetch_email.py` / `fetch_email_imap.py` - Busca e-mails do Gmail
+5. `fuse_sources.py` - Mescla API + email
+6. `build_processes_kpis_alerts.py` - Gera KPIs e alertas
+7. `web/index.html` - Visualiza dashboards
+
+### Incrementalidade e janelas de datas
+
+- `fetch_api.py` grava `data/.sync_state.json` com `api.processes_last_dh` em UTC. Na próxima execução aplica janela de segurança de 5 minutos para não perder registros.
+- `fetch_deliveries.py` usa `api.deliveries_last_dh` (fallback para ontem 00:00) e exige janela `DtInitial`/`DtFinal` definida em `scripts/config.json` — por padrão utiliza o mês corrente. Para habilitar o endpoint, defina `deliveries.enabled = true`.
+- Os números monetários vindos da API são normalizados para `float` e as datas convertidas para ISO (`YYYY-MM-DD` ou `YYYY-MM-DD HH:MM:SS`).
+- Logs de execução ficam em `data/logs.txt`.
 
 ## Front-end (site)
 

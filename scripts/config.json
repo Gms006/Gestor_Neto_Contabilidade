@@ -1,18 +1,59 @@
 {
   "acessorias": {
     "base_url": "https://api.acessorias.com",
-    "endpoints": { "processes": "/processes", "deliveries": "/deliveries", "companies": "/companies" },
+    "endpoints": {
+      "processes": "/processes",
+      "deliveries": "/deliveries",
+      "companies": "/companies"
+    },
     "page_size": 20,
     "proc_status": "A,C",
-    "dt_last_dh": null
+    "status_filters": [
+      "A",
+      "C"
+    ]
   },
-  "email": { "provider": "imap" },
+  "deliveries": {
+    "enabled": false,
+    "identificador": "ListAll",
+    "dt_initial": null,
+    "dt_final": null,
+    "include_config": true
+  },
+  "companies": {
+    "enabled": false,
+    "identificador": "ListAll",
+    "with_obligations": false
+  },
+  "invoices": {
+    "enabled": false,
+    "identificador": "Geral",
+    "filters": {
+      "DtCriaIni": null,
+      "DtCriaFim": null
+    }
+  },
+  "email": {
+    "provider": "imap"
+  },
   "imap": {
     "search_days": 180,
     "max_messages": 2000,
-    "subject_keywords": ["Simples Nacional", "Lucro Presumido", "Lucro Real", "Controle mensal", "Processo fiscal"],
+    "subject_keywords": [
+      "Simples Nacional",
+      "Lucro Presumido",
+      "Lucro Real",
+      "Controle mensal",
+      "Processo fiscal"
+    ],
     "from_filters": []
   },
-  "deadlines": { "sn_day": 20, "reinf_day": 15 },
-  "warning_days": { "sn": 3, "reinf": 3 }
+  "deadlines": {
+    "sn_day": 20,
+    "reinf_day": 15
+  },
+  "warning_days": {
+    "sn": 3,
+    "reinf": 3
+  }
 }
