@@ -1,14 +1,23 @@
+# secrets
 .env
+*.env
+credentials.json
+token.json
+
+# artefatos locais
+/data/raw_api/
+/data/raw_email/
+/data/*.json
+
+# venv
 .venv/
+
+# python cache
 __pycache__/
 *.pyc
 *.pyo
-credentials.json
-token.json
-data/*.json
-data/raw_api/*
-data/raw_email/*
-data/*.txt
+
+# outros
 *.log
 .DS_Store
 Thumbs.db

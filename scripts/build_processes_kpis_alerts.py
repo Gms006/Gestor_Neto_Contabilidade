@@ -1,334 +1,158 @@
-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-build_processes_kpis_alerts.py
-Gera processes.json, kpis.json e alerts.json
+A partir de data/api_processes.json e data/events.json calcula:
+- processes.json (por proc_id)
+- kpis.json (contagens)
+- alerts.json (SN dia 20, REINF dia 15, bloqueantes)
 """
-
-import sys
-import json
+import json, os
 from pathlib import Path
-from datetime import datetime, timedelta
-from collections import defaultdict
+from typing import Any, Dict, List, Optional
+from collections import defaultdict, Counter
+from datetime import datetime, date
 
-sys.path.insert(0, str(Path(__file__).parent))
-from utils.logger import setup_logger
-from utils.date_helpers import parse_date
+ROOT = Path(__file__).resolve().parents[1]
+DATA = ROOT / "data"
+API_FILE = DATA / "api_processes.json"
+EVENTS_FILE = DATA / "events.json"
+KPI_FILE = DATA / "kpis.json"
+ALERTS_FILE = DATA / "alerts.json"
+PROC_OUT = DATA / "processes.json"
+CONFIG = ROOT / "scripts" / "config.json"
 
-logger = setup_logger('build_kpis_alerts')
+def loadj(p: Path):
+    if not p.exists(): return []
+    return json.loads(p.read_text(encoding="utf-8"))
 
-BASE_DIR = Path(__file__).parent.parent
-DATA_DIR = BASE_DIR / 'data'
-CONFIG_FILE = BASE_DIR / 'scripts' / 'config.json'
+def loadcfg() -> Dict[str, Any]:
+    return json.loads(CONFIG.read_text(encoding="utf-8"))
 
-def load_config():
-    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-        return json.load(f)
-
-def load_events():
-    with open(DATA_DIR / 'events.json', 'r', encoding='utf-8') as f:
-        return json.load(f)
-
-def load_raw_processes():
-    """Carrega processos brutos da API"""
-    raw_file = BASE_DIR / 'data' / 'raw_api' / 'processes_latest.json'
-    if raw_file.exists():
-        with open(raw_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return []
-
-def build_processes(events, raw_processes):
-    """Constrói processes.json"""
-    processes_dict = defaultdict(lambda: {
-        'eventos': [],
-        'inicio': None,
-        'conclusao': None,
-        'kpis': defaultdict(set)
-    })
-    
-    # Indexa processos brutos
-    raw_index = {p.get('ProcID'): p for p in raw_processes}
-    
-    # Agrupa eventos por processo
-    for event in events:
-        proc_id = event['proc_id']
-        competencia = event.get('competencia')
-        key = f"{proc_id}_{competencia}" if competencia else proc_id
-        
-        processes_dict[key]['eventos'].append(event)
-        processes_dict[key]['proc_id'] = proc_id
-        processes_dict[key]['competencia'] = competencia
-        
-        # Atualiza KPIs
-        categoria = event['categoria']
-        if categoria in ['efd_reinf', 'efd_contrib']:
-            if event['subtipo'] == 'obrig':
-                processes_dict[key]['kpis'][categoria] = 'Obrigatória'
-            elif event['subtipo'] == 'dispensa':
-                processes_dict[key]['kpis'][categoria] = 'Dispensada'
-        
-        elif categoria == 'difal' and event['subtipo']:
-            processes_dict[key]['kpis']['difal'] = event['subtipo']
-        
-        elif categoria == 'fora_das' and event['subtipo']:
-            processes_dict[key]['kpis']['fora_das'].add(event['subtipo'])
-    
-    # Constrói lista final
-    processes = []
-    for key, data in processes_dict.items():
-        proc_id = data['proc_id']
-        raw_proc = raw_index.get(proc_id, {})
-        
-        # Determina datas
-        eventos_datas = [e['data_evento'] for e in data['eventos'] if e.get('data_evento')]
-        inicio = min(eventos_datas) if eventos_datas else raw_proc.get('ProcInicio')
-        
-        # Verifica se tem finalização
-        finalizacoes = [e for e in data['eventos'] if e['categoria'] == 'finalizacao']
-        conclusao = max([e['data_evento'] for e in finalizacoes if e.get('data_evento')], default=None)
-        
-        if not conclusao:
-            conclusao = raw_proc.get('ProcConclusao') if raw_proc.get('ProcStatus') == 'C' else None
-        
-        # Calcula dias corridos
-        dias_corridos = None
-        if inicio and conclusao:
-            try:
-                dt_inicio = parse_date(inicio)
-                dt_conclusao = parse_date(conclusao)
-                if dt_inicio and dt_conclusao:
-                    dias_corridos = (dt_conclusao - dt_inicio).days
-            except:
-                pass
-        
-        if not dias_corridos:
-            dias_corridos = raw_proc.get('ProcDiasCorridos')
-        
-        # Responsável final
-        responsavel_final = None
-        if finalizacoes:
-            responsavel_final = finalizacoes[-1].get('responsavel')
-        
-        process = {
-            'proc_id': proc_id,
-            'empresa': data['eventos'][0].get('empresa') if data['eventos'] else raw_proc.get('EmpNome'),
-            'cnpj': data['eventos'][0].get('cnpj') if data['eventos'] else raw_proc.get('EmpCNPJ'),
-            'competencia': data.get('competencia'),
-            'inicio': inicio,
-            'conclusao': conclusao,
-            'dias_corridos': dias_corridos,
-            'status': raw_proc.get('ProcStatus'),
-            'gestor': raw_proc.get('ProcGestor'),
-            'responsavel_final': responsavel_final,
-            'ultimo_update': raw_proc.get('DtLastDH'),
-            'kpis': {
-                'efd_reinf': data['kpis'].get('efd_reinf'),
-                'efd_contrib': data['kpis'].get('efd_contrib'),
-                'difal': data['kpis'].get('difal'),
-                'fora_das': list(data['kpis'].get('fora_das', []))
-            }
-        }
-        
-        processes.append(process)
-    
-    return processes
-
-def build_kpis(events, processes):
-    """Constrói kpis.json"""
-    kpis = {
-        'entregas_por_competencia': defaultdict(lambda: {'reinf_obrig': 0, 'reinf_disp': 0, 'efd_obrig': 0, 'efd_disp': 0}),
-        'difal_por_tipo': defaultdict(int),
-        'fora_das_por_tipo': defaultdict(int),
-        'produtividade': {},
-        'evolucao_fechamento': defaultdict(list)
-    }
-    
-    # Entregas por competência
-    for event in events:
-        comp = event.get('competencia')
-        if not comp:
-            continue
-        
-        if event['categoria'] == 'efd_reinf':
-            if event['subtipo'] == 'obrig':
-                kpis['entregas_por_competencia'][comp]['reinf_obrig'] += 1
-            elif event['subtipo'] == 'dispensa':
-                kpis['entregas_por_competencia'][comp]['reinf_disp'] += 1
-        
-        elif event['categoria'] == 'efd_contrib':
-            if event['subtipo'] == 'obrig':
-                kpis['entregas_por_competencia'][comp]['efd_obrig'] += 1
-            elif event['subtipo'] == 'dispensa':
-                kpis['entregas_por_competencia'][comp]['efd_disp'] += 1
-        
-        elif event['categoria'] == 'difal' and event['subtipo']:
-            kpis['difal_por_tipo'][event['subtipo']] += 1
-        
-        elif event['categoria'] == 'fora_das' and event['subtipo']:
-            kpis['fora_das_por_tipo'][event['subtipo']] += 1
-    
-    # Produtividade
-    finalizados = [p for p in processes if p.get('conclusao')]
-    tempos = [p['dias_corridos'] for p in finalizados if p.get('dias_corridos')]
-    
-    kpis['produtividade'] = {
-        'finalizados_total': len(finalizados),
-        'tempo_medio': sum(tempos) / len(tempos) if tempos else 0,
-        'tempo_mediano': sorted(tempos)[len(tempos)//2] if tempos else 0,
-        'ranking_por_responsavel': {}
-    }
-    
-    # Ranking por responsável
-    resp_stats = defaultdict(lambda: {'count': 0, 'tempo_total': 0})
-    for proc in finalizados:
-        resp = proc.get('responsavel_final')
-        if resp and proc.get('dias_corridos'):
-            resp_stats[resp]['count'] += 1
-            resp_stats[resp]['tempo_total'] += proc['dias_corridos']
-    
-    for resp, stats in resp_stats.items():
-        kpis['produtividade']['ranking_por_responsavel'][resp] = {
-            'finalizados': stats['count'],
-            'tempo_medio': stats['tempo_total'] / stats['count']
-        }
-    
-    # Evolução fechamento (dia do mês)
-    for proc in finalizados:
-        if proc.get('conclusao') and proc.get('competencia'):
-            try:
-                dt_conclusao = parse_date(proc['conclusao'])
-                if dt_conclusao:
-                    comp = proc['competencia']
-                    dia_mes = dt_conclusao.day
-                    kpis['evolucao_fechamento'][comp].append(dia_mes)
-            except:
-                pass
-    
-    # Calcula médias por competência
-    for comp, dias in kpis['evolucao_fechamento'].items():
-        kpis['evolucao_fechamento'][comp] = {
-            'media': sum(dias) / len(dias) if dias else 0,
-            'mediana': sorted(dias)[len(dias)//2] if dias else 0,
-            'contagem': len(dias)
-        }
-    
-    # Converte defaultdict para dict normal
-    kpis['entregas_por_competencia'] = dict(kpis['entregas_por_competencia'])
-    kpis['difal_por_tipo'] = dict(kpis['difal_por_tipo'])
-    kpis['fora_das_por_tipo'] = dict(kpis['fora_das_por_tipo'])
-    kpis['evolucao_fechamento'] = dict(kpis['evolucao_fechamento'])
-    
-    return kpis
-
-def build_alerts(events, processes, config):
-    """Constrói alerts.json"""
-    alerts = {
-        'sn_em_risco': [],
-        'reinf_em_risco': [],
-        'bloqueantes': [],
-        'nao_mapeados_api': [],
-        'divergencias': []
-    }
-    
-    hoje = datetime.now().date()
-    deadlines = config['deadlines']
-    warning_days_cfg = config['warning_days']
-    
-    # Carrega alertas temporários
-    temp_file = DATA_DIR / 'temp_alerts.json'
-    if temp_file.exists():
-        with open(temp_file, 'r', encoding='utf-8') as f:
-            temp_alerts = json.load(f)
-            alerts['divergencias'] = temp_alerts.get('divergencias', [])
-            alerts['nao_mapeados_api'] = temp_alerts.get('nao_mapeados_api', [])
-    
-    # Alertas de prazo SN e REINF
-    for proc in processes:
-        comp = proc.get('competencia')
-        if not comp or proc.get('conclusao'):
-            continue
-        
-        try:
-            ano, mes = map(int, comp.split('-'))
-            
-            # SN - dia 20
-            prazo_sn = datetime(ano, mes, deadlines['sn_day']).date()
-            dias_para_sn = (prazo_sn - hoje).days
-            
-            if 0 <= dias_para_sn <= warning_days_cfg['sn']:
-                alerts['sn_em_risco'].append({
-                    'proc_id': proc['proc_id'],
-                    'empresa': proc['empresa'],
-                    'competencia': comp,
-                    'prazo': prazo_sn.isoformat(),
-                    'dias_para_prazo': dias_para_sn
-                })
-            
-            # REINF - dia 15
-            prazo_reinf = datetime(ano, mes, deadlines['reinf_day']).date()
-            dias_para_reinf = (prazo_reinf - hoje).days
-            
-            # Verifica se tem REINF obrigatória
-            has_reinf_obrig = proc['kpis'].get('efd_reinf') == 'Obrigatória'
-            
-            if has_reinf_obrig and 0 <= dias_para_reinf <= warning_days_cfg['reinf']:
-                alerts['reinf_em_risco'].append({
-                    'proc_id': proc['proc_id'],
-                    'empresa': proc['empresa'],
-                    'competencia': comp,
-                    'prazo': prazo_reinf.isoformat(),
-                    'dias_para_prazo': dias_para_reinf
-                })
-        
-        except:
-            pass
-    
-    # Bloqueantes
-    for event in events:
-        if event.get('bloqueante') and event.get('passo_status') != 'OK':
-            alerts['bloqueantes'].append({
-                'proc_id': event['proc_id'],
-                'passo': event.get('categoria'),
-                'responsavel': event.get('responsavel'),
-                'prazo': event.get('prazo')
-            })
-    
-    return alerts
+def to_iso(br_date: Optional[str]) -> Optional[str]:
+    if not br_date:
+        return None
+    try:
+        if " " in br_date:
+            return datetime.strptime(br_date, "%d/%m/%Y %H:%M:%S").strftime("%Y-%m-%d")
+        return datetime.strptime(br_date, "%d/%m/%Y").strftime("%Y-%m-%d")
+    except Exception:
+        return None
 
 def main():
-    logger.info("=" * 60)
-    logger.info("BUILD PROCESSES/KPIs/ALERTS - Início")
-    logger.info("=" * 60)
-    
-    config = load_config()
-    events = load_events()
-    raw_processes = load_raw_processes()
-    
-    logger.info(f"Eventos carregados: {len(events)}")
-    logger.info(f"Processos brutos: {len(raw_processes)}")
-    
-    # Build processes
-    processes = build_processes(events, raw_processes)
-    logger.info(f"Processos gerados: {len(processes)}")
-    
-    with open(DATA_DIR / 'processes.json', 'w', encoding='utf-8') as f:
-        json.dump(processes, f, indent=2, ensure_ascii=False)
-    
-    # Build KPIs
-    kpis = build_kpis(events, processes)
-    logger.info("KPIs gerados")
-    
-    with open(DATA_DIR / 'kpis.json', 'w', encoding='utf-8') as f:
-        json.dump(kpis, f, indent=2, ensure_ascii=False)
-    
-    # Build alerts
-    alerts = build_alerts(events, processes, config)
-    logger.info(f"Alertas: SN={len(alerts['sn_em_risco'])}, REINF={len(alerts['reinf_em_risco'])}, Bloq={len(alerts['bloqueantes'])}")
-    
-    with open(DATA_DIR / 'alerts.json', 'w', encoding='utf-8') as f:
-        json.dump(alerts, f, indent=2, ensure_ascii=False)
-    
-    logger.info("BUILD PROCESSES/KPIs/ALERTS - Concluído")
-    logger.info("=" * 60)
+    cfg = loadcfg()
+    api = loadj(API_FILE)
+    events = loadj(EVENTS_FILE)
+    deadlines = cfg.get("deadlines", {"sn_day":20,"reinf_day":15})
+    warn = cfg.get("warning_days", {"sn":3,"reinf":3})
+    today = date.today()
 
-if __name__ == '__main__':
+    # Processes: usar api_processes.json para datas e gestor
+    processes: List[Dict[str, Any]] = []
+    by_proc: Dict[str, Dict[str, Any]] = {}
+
+    for proc in api:
+        pid = str(proc.get("ProcID"))
+        by_proc[pid] = {
+            "proc_id": pid,
+            "empresa": proc.get("EmpNome"),
+            "cnpj": proc.get("EmpCNPJ"),
+            "inicio": to_iso(proc.get("ProcInicio")),
+            "conclusao": to_iso(proc.get("ProcConclusao")),
+            "dias_corridos": int(str(proc.get("ProcDiasCorridos") or "0").strip() or 0),
+            "status": proc.get("ProcStatus"),
+            "gestor": proc.get("ProcGestor"),
+            "ultimo_update": proc.get("DtLastDH")
+        }
+
+    # KPIs básicos
+    entregas_por_comp = defaultdict(lambda: {"efd_reinf":{"Obrigatória":0,"Dispensada":0},
+                                             "efd_contrib":{"Obrigatória":0,"Dispensada":0}})
+    difal_por_tipo = Counter()
+    fora_das_por_tipo = Counter()
+
+    # Aux para alertas
+    sn_em_risco = []
+    reinf_em_risco = []
+    bloqueantes = []
+
+    # Percorrer eventos para KPIs e alertas
+    for e in events:
+        cat = e.get("categoria")
+        st = e.get("status")
+        comp = e.get("competencia")
+        pid = str(e.get("proc_id") or "")
+
+        if cat == "efd_reinf" and st in ("Obrigatória","Dispensada") and comp:
+            entregas_por_comp[comp]["efd_reinf"][st] += 1
+
+        if cat == "efd_contrib" and st in ("Obrigatória","Dispensada") and comp:
+            entregas_por_comp[comp]["efd_contrib"][st] += 1
+
+        if cat == "difal":
+            difal_por_tipo[e.get("subtipo") or "nao_informado"] += 1
+
+        if cat == "fora_das":
+            subt = e.get("subtipo") or "NA"
+            fora_das_por_tipo[subt] += 1
+
+        # bloqueantes (da API)
+        if e.get("source") == "api" and e.get("bloqueante") and (e.get("passo_status") or "").lower() != "ok":
+            bloqueantes.append({
+                "proc_id": pid,
+                "empresa": e.get("empresa"),
+                "passo_categoria": cat,
+                "responsavel": e.get("responsavel"),
+                "prazo": e.get("prazo")
+            })
+
+    # Alertas por prazo (SN 20, REINF 15) – heurística via competência corrente
+    # Se houver eventos da competência atual que indiquem obrigatoriedade e não houver finalização/conclusão, alertar.
+    today_month = today.strftime("%Y-%m")
+    # REINF
+    reinf_obrig = [e for e in events if e.get("categoria")=="efd_reinf" and e.get("status")=="Obrigatória" and (e.get("competencia")==today_month)]
+    for e in reinf_obrig:
+        # se não houver evento de finalização para o mesmo proc_id nesta competência
+        has_final = any((x.get("categoria")=="finalizacao" and x.get("proc_id")==e.get("proc_id") and x.get("competencia")==today_month) for x in events)
+        # janela
+        if today.day >= (deadlines["reinf_day"] - warn["reinf"]) and not has_final:
+            reinf_em_risco.append({
+                "proc_id": e.get("proc_id"),
+                "empresa": e.get("empresa"),
+                "competencia": today_month,
+                "prazo": f"{today.year}-{today.month:02d}-{deadlines['reinf_day']:02d}"
+            })
+
+    # SN
+    sn_processos = [p for p in by_proc.values() if (p.get("status") or "").lower().startswith("em")]
+    for p in sn_processos:
+        if p.get("conclusao") is None and today.day >= (deadlines["sn_day"] - warn["sn"]):
+            sn_em_risco.append({
+                "proc_id": p["proc_id"],
+                "empresa": p["empresa"],
+                "prazo": f"{today.year}-{today.month:02d}-{deadlines['sn_day']:02d}"
+            })
+
+    # Montar KPIs JSON
+    kpis = {
+        "entregas_por_competencia": entregas_por_comp,
+        "difal_por_tipo": dict(difal_por_tipo),
+        "fora_das_por_tipo": dict(fora_das_por_tipo),
+        "produtividade": {
+            "finalizados_no_mes": sum(1 for p in by_proc.values() if (p.get("conclusao") or "").startswith(today_month)),
+            "tempo_medio_finalizacao_dias": None,  # pode ser refinado com histórico
+            "ranking_por_responsavel": []          # depende de responsável_final por processo
+        }
+    }
+
+    # Persistir
+    PROC_OUT.write_text(json.dumps(list(by_proc.values()), ensure_ascii=False, indent=2), encoding="utf-8")
+    KPI_FILE.write_text(json.dumps(kpis, ensure_ascii=False, indent=2), encoding="utf-8")
+    ALERTS_FILE.write_text(json.dumps({
+        "sn_em_risco": sn_em_risco,
+        "reinf_em_risco": reinf_em_risco,
+        "bloqueantes": bloqueantes
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"[build_processes_kpis_alerts] OK: {PROC_OUT}, {KPI_FILE}, {ALERTS_FILE}")
+
+if __name__ == "__main__":
     main()
