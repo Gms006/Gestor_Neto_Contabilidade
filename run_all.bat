@@ -1,133 +1,23 @@
 @echo off
-
-echo ========================================
-
-echo Sistema de Gestao Operacional
-
-echo ========================================
-
-echo.
-
-
-
+setlocal enabledelayedexpansion
 cd /d %~dp0
 
+echo === Gestor Neto Contabilidade (Windows) ===
 
+if exist .venv\Scripts\activate call .venv\Scripts\activate
 
-if not exist .venv (
+python scripts\fetch_api.py || goto :err
+python scripts\flatten_steps.py || goto :err
+python scripts\fetch_email_imap.py || goto :err
+python scripts\fuse_sources.py || goto :err
+python scripts\build_processes_kpis_alerts.py || goto :err
 
-    echo Criando ambiente virtual...
+echo OK! Abra web\index.html
+exit /b 0
 
-    python -m venv .venv
-
-)
-
-
-
-echo Ativando ambiente virtual...
-
-call .venv\Scriptsctivate.bat
-
-
-
-echo.
-
-echo [1/5] Buscando dados da API Acessorias...
-
-python scriptsetch_api.py
-
-if errorlevel 1 (
-
-    echo ERRO ao buscar API
-
-    pause
-
-    exit /b 1
-
-)
-
-
-
-echo.
-
-echo [2/5] Processando passos dos processos...
-
-python scriptslatten_steps.py
-
-if errorlevel 1 (
-
-    echo ERRO ao processar passos
-
-    pause
-
-    exit /b 1
-
-)
-
-
-
-echo.
-
-echo [3/5] Buscando e-mails do Gmail...
-
-python scriptsetch_email.py
-
-if errorlevel 1 (
-
-    echo ERRO ao buscar emails
-
-    pause
-
-    exit /b 1
-
-)
-
-
-
-echo.
-
-echo [4/5] Mesclando fontes de dados...
-
-python scriptsuse_sources.py
-
-if errorlevel 1 (
-
-    echo ERRO ao mesclar dados
-
-    pause
-
-    exit /b 1
-
-)
-
-
-
-echo.
-
-echo [5/5] Gerando KPIs e alertas...
-
-python scriptsuild_processes_kpis_alerts.py
-
-if errorlevel 1 (
-
-    echo ERRO ao gerar KPIs
-
-    pause
-
-    exit /b 1
-
-)
-
-
-
-echo.
-
-echo ========================================
-
-echo Processamento concluido!
-
-echo Abra: web\index.html
-
+:err
+echo ERRO na etapa acima. Verifique data\logs.txt (se houver) e a saída do console.
+exit /b 1
 echo ========================================
 
 pause

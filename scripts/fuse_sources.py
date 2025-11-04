@@ -1,133 +1,64 @@
-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-fuse_sources.py
-Mescla eventos da API e e-mail, gerando events.json e alertas de divergência
+Funde events_api.json (fonte canônica) com events_email.json (complemento/auditoria)
+Gera data/events.json + data/divergences.json
 """
-
-import sys
 import json
 from pathlib import Path
-from collections import defaultdict
+from typing import Dict, Any, List, Tuple
 
-sys.path.insert(0, str(Path(__file__).parent))
-from utils.logger import setup_logger
+ROOT = Path(__file__).resolve().parents[1]
+DATA = ROOT / "data"
+EVT_API = DATA / "events_api.json"
+EVT_MAIL = DATA / "events_email.json"
+OUT_EVENTS = DATA / "events.json"
+OUT_DIVERG = DATA / "divergences.json"
 
-logger = setup_logger('fuse_sources')
+Key = Tuple[str, str, str, str]  # (proc_id, categoria, subtipo, competencia)
 
-BASE_DIR = Path(__file__).parent.parent
-DATA_DIR = BASE_DIR / 'data'
+def loadj(p: Path):
+    if not p.exists(): return []
+    return json.loads(p.read_text(encoding="utf-8"))
 
-def load_events(source):
-    """Carrega eventos de um arquivo"""
-    file_path = DATA_DIR / f'events_{source}.json'
-    
-    if not file_path.exists():
-        logger.warning(f"Arquivo não encontrado: {file_path}")
-        return []
-    
-    with open(file_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
-
-def create_event_key(event):
-    """Cria chave única para um evento"""
+def key_of(e: Dict[str, Any]) -> Key:
     return (
-        event['proc_id'],
-        event['categoria'],
-        event.get('subtipo'),
-        event.get('competencia')
+        str(e.get("proc_id") or ""),
+        str(e.get("categoria") or ""),
+        str(e.get("subtipo") or ""),
+        str(e.get("competencia") or "")
     )
 
-def merge_events(api_events, email_events):
-    """Mescla eventos priorizando API"""
-    merged = {}
-    divergences = []
-    not_mapped = []
-    
-    # Indexa eventos da API
-    api_index = {}
-    for event in api_events:
-        key = create_event_key(event)
-        api_index[key] = event
-        merged[key] = event
-    
-    logger.info(f"Eventos API indexados: {len(api_index)}")
-    
-    # Processa eventos de e-mail
-    for email_event in email_events:
-        key = create_event_key(email_event)
-        
-        if key in api_index:
-            # Verifica divergência
-            api_event = api_index[key]
-            
-            if api_event['status'] != email_event['status']:
-                divergences.append({
-                    'proc_id': email_event['proc_id'],
-                    'categoria': email_event['categoria'],
-                    'subtipo': email_event.get('subtipo'),
-                    'competencia': email_event.get('competencia'),
-                    'api_status': api_event['status'],
-                    'email_status': email_event['status']
-                })
-                logger.warning(f"Divergência detectada: {key}")
-            
-            # Enriquece com dados do e-mail se ausentes na API
-            if not api_event.get('responsavel') and email_event.get('responsavel'):
-                merged[key]['responsavel'] = email_event['responsavel']
-                merged[key]['responsavel_fonte'] = 'email'
-        
-        else:
-            # Evento só existe no e-mail
-            merged[key] = email_event
-            not_mapped.append({
-                'proc_id': email_event['proc_id'],
-                'categoria': email_event['categoria'],
-                'subtipo': email_event.get('subtipo'),
-                'detalhe': f"Evento encontrado apenas em e-mail",
-                'fonte': 'email'
-            })
-            logger.warning(f"Evento não mapeado na API: {key}")
-    
-    logger.info(f"Eventos mesclados: {len(merged)}")
-    logger.info(f"Divergências: {len(divergences)}")
-    logger.info(f"Não mapeados: {len(not_mapped)}")
-    
-    return list(merged.values()), divergences, not_mapped
-
 def main():
-    logger.info("=" * 60)
-    logger.info("FUSE SOURCES - Início")
-    logger.info("=" * 60)
-    
-    # Carrega eventos
-    api_events = load_events('api')
-    email_events = load_events('email')
-    
-    logger.info(f"Eventos API: {len(api_events)}")
-    logger.info(f"Eventos Email: {len(email_events)}")
-    
-    # Mescla
-    merged_events, divergences, not_mapped = merge_events(api_events, email_events)
-    
-    # Salva events.json
-    output_file = DATA_DIR / 'events.json'
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(merged_events, f, indent=2, ensure_ascii=False)
-    
-    logger.info(f"Eventos finais salvos: {output_file}")
-    
-    # Salva divergências e não mapeados temporariamente
-    temp_alerts = {
-        'divergencias': divergences,
-        'nao_mapeados_api': not_mapped
-    }
-    
-    temp_file = DATA_DIR / 'temp_alerts.json'
-    with open(temp_file, 'w', encoding='utf-8') as f:
-        json.dump(temp_alerts, f, indent=2, ensure_ascii=False)
-    
-    logger.info("FUSE SOURCES - Concluído")
-    logger.info("=" * 60)
+    api = loadj(EVT_API)
+    mail = loadj(EVT_MAIL)
 
-if __name__ == '__main__':
+    canonic: Dict[Key, Dict[str, Any]] = {}
+    for e in api:
+        canonic[key_of(e)] = e
+
+    diverg: List[Dict[str, Any]] = []
+    # merge email (complementar)
+    for e in mail:
+        k = key_of(e)
+        if k not in canonic:
+            canonic[k] = e  # complementar
+        else:
+            a = canonic[k]
+            # verificar divergências de status
+            if (a.get("status") or "").lower() != (e.get("status") or "").lower():
+                diverg.append({
+                    "proc_id": e.get("proc_id"),
+                    "categoria": e.get("categoria"),
+                    "subtipo": e.get("subtipo"),
+                    "competencia": e.get("competencia"),
+                    "api": a.get("status"),
+                    "email": e.get("status")
+                })
+
+    merged = list(canonic.values())
+    OUT_EVENTS.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+    OUT_DIVERG.write_text(json.dumps(diverg, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[fuse_sources] OK: {OUT_EVENTS}  divergências: {len(diverg)}")
+
+if __name__ == "__main__":
     main()

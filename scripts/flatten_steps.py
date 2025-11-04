@@ -1,171 +1,124 @@
-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-flatten_steps.py
-Achata árvore de passos dos processos e gera events_api.json
+Achata ProcPassos (recursivo) aplicando regras de rules.json e gera data/events_api.json
+Também preserva prazo, responsável, status do passo e bloqueante.
 """
-
-import sys
 import json
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
-sys.path.insert(0, str(Path(__file__).parent))
-from utils.logger import setup_logger
-from utils.date_helpers import parse_date, infer_competencia
+ROOT = Path(__file__).resolve().parents[1]
+DATA = ROOT / "data"
+API_FILE = DATA / "api_processes.json"
+EVENTS_API = DATA / "events_api.json"
+RULES_PATH = ROOT / "scripts" / "rules.json"
 
-logger = setup_logger('flatten_steps')
-
-BASE_DIR = Path(__file__).parent.parent
-RULES_FILE = BASE_DIR / 'scripts' / 'rules.json'
-RAW_API_DIR = BASE_DIR / 'data' / 'raw_api'
-DATA_DIR = BASE_DIR / 'data'
-
-def load_rules():
-    """Carrega regras de mapeamento"""
-    with open(RULES_FILE, 'r', encoding='utf-8') as f:
+def load_json(p: Path):
+    with open(p, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def match_step(step_name, rules):
-    """Aplica regras para identificar categoria/subtipo/status"""
-    for rule in rules['matchers']:
-        if rule['contains'].lower() in step_name.lower():
-            return {
-                'categoria': rule['categoria'],
-                'subtipo': rule['subtipo'],
-                'status': rule['status']
-            }
-        
-        # Verifica tags
-        for tag in rule.get('tags', []):
-            if tag.lower() in step_name.lower():
-                return {
-                    'categoria': rule['categoria'],
-                    'subtipo': rule['subtipo'],
-                    'status': rule['status']
-                }
-    
+def match_rule(name: str, rules: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    low = (name or "").lower()
+    for r in rules:
+        if r.get("contains", "").lower() in low:
+            return r
     return None
 
-def flatten_steps_recursive(steps, parent_path=""):
-    """Achata recursivamente árvore de passos"""
-    flat_steps = []
-    
-    if not isinstance(steps, list):
-        return flat_steps
-    
-    for idx, step in enumerate(steps):
-        step_name = step.get('Nome', '')
-        step_path = f"{parent_path}/{step_name}" if parent_path else step_name
-        
-        flat_step = {
-            'path': step_path,
-            'nome': step_name,
-            'status': step.get('Status'),
-            'bloqueante': step.get('Bloqueante'),
-            'conclusao': step.get('Conclusao'),
-            'automacao': step.get('Automacao', {})
-        }
-        
-        flat_steps.append(flat_step)
-        
-        # Recursão para sub-passos
-        if 'ProcPassos' in step and step['ProcPassos']:
-            sub_steps = flatten_steps_recursive(step['ProcPassos'], step_path)
-            flat_steps.extend(sub_steps)
-    
-    return flat_steps
-
-def process_step_to_event(step, process, rules):
-    """Converte um passo em evento"""
-    match = match_step(step['nome'], rules)
-    
-    if not match:
+def to_date_iso(br_date: Optional[str]) -> Optional[str]:
+    # aceita "dd/mm/aaaa" e "dd/mm/aaaa HH:MM:SS"
+    if not br_date:
         return None
-    
-    # Extrai dados da automação/entrega
-    automacao = step.get('automacao', {})
-    entrega = automacao.get('Entrega', {})
-    
-    # Inferir competência
-    data_conclusao = parse_date(step.get('conclusao')) or parse_date(process.get('ProcConclusao'))
-    prazo = parse_date(entrega.get('Prazo'))
-    
-    data_evento = data_conclusao or prazo or datetime.now()
-    competencia = infer_competencia(data_evento)
-    
-    event = {
-        'source': 'api',
-        'proc_id': process.get('ProcID'),
-        'empresa': process.get('EmpNome'),
-        'cnpj': process.get('EmpCNPJ'),
-        'regime': None,  # Inferir de outros campos se disponível
-        'atividade': None,
-        'categoria': match['categoria'],
-        'subtipo': match['subtipo'],
-        'status': match['status'],
-        'responsavel': entrega.get('Responsavel'),
-        'prazo': entrega.get('Prazo'),
-        'data_evento': data_evento.strftime('%Y-%m-%d') if data_evento else None,
-        'competencia': competencia,
-        'passo_status': step.get('status'),
-        'bloqueante': step.get('bloqueante'),
-        'email_id': None,
-        'body_hash': None
-    }
-    
-    return event
+    try:
+        if " " in br_date:
+            d = datetime.strptime(br_date, "%d/%m/%Y %H:%M:%S")
+        else:
+            d = datetime.strptime(br_date, "%d/%m/%Y")
+        return d.strftime("%Y-%m-%d")
+    except Exception:
+        return None
 
-def flatten_all_processes(processes, rules):
-    """Processa todos os processos e gera eventos"""
-    all_events = []
-    
-    for process in processes:
-        proc_id = process.get('ProcID')
-        logger.info(f"Processando processo {proc_id}...")
-        
-        steps_raw = process.get('ProcPassos', [])
-        flat_steps = flatten_steps_recursive(steps_raw)
-        
-        for step in flat_steps:
-            event = process_step_to_event(step, process, rules)
-            if event:
-                all_events.append(event)
-    
-    return all_events
+def competence_from_date(date_iso: Optional[str]) -> Optional[str]:
+    if not date_iso:
+        return None
+    return date_iso[:7]
+
+def flatten_proc(proc: Dict[str, Any], rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    pid = str(proc.get("ProcID") or proc.get("ProcId") or "")
+    emp = proc.get("EmpNome")
+    cnpj = proc.get("EmpCNPJ")
+    regime = proc.get("ProcDepartamento") or ""  # campo aproximado; ajuste se necessário
+
+    passos = proc.get("ProcPassos") or []
+    stack = [(None, passos)]
+
+    def walk(items: List[Dict[str, Any]]):
+        for it in items:
+            nome = it.get("Nome") or it.get("Descricao") or ""
+            status_passo = it.get("Status")  # "OK" / "Pendente" etc.
+            autom = it.get("Automacao")
+            bloqueante = None
+            prazo = None
+            responsavel = None
+
+            # Automacao pode ser dict (Entrega) ou lista (desdobramento)
+            if isinstance(autom, dict):
+                bloqueante = autom.get("Bloqueante")
+                entrega = autom.get("Entrega")
+                if isinstance(entrega, dict):
+                    prazo = entrega.get("Prazo")
+                    responsavel = entrega.get("Responsavel")
+                    nome_entrega = entrega.get("Nome") or ""
+                    nome_chk = f"{nome} | {nome_entrega}"
+                else:
+                    nome_chk = nome
+            else:
+                nome_chk = nome
+
+            rule = match_rule(nome_chk, rules)
+            if rule:
+                evt = {
+                    "source": "api",
+                    "proc_id": pid,
+                    "empresa": emp,
+                    "cnpj": cnpj,
+                    "regime": regime,
+                    "atividade": None,
+                    "categoria": rule["categoria"],
+                    "subtipo": rule.get("subtipo"),
+                    "status": rule.get("status"),
+                    "responsavel": responsavel,
+                    "prazo": to_date_iso(prazo),
+                    "data_evento": to_date_iso(proc.get("ProcConclusao")) or to_date_iso(proc.get("ProcInicio")),
+                    "competencia": None,
+                    "passo_status": status_passo,
+                    "bloqueante": True if str(bloqueante).lower() == "sim" else False
+                }
+                if evt["prazo"]:
+                    evt["competencia"] = competence_from_date(evt["prazo"])
+                elif evt["data_evento"]:
+                    evt["competencia"] = competence_from_date(evt["data_evento"])
+                out.append(evt)
+
+            # Sub-passos?
+            sub = it.get("ProcPassos")
+            if isinstance(sub, list) and sub:
+                walk(sub)
+
+    walk(passos)
+    return out
 
 def main():
-    logger.info("=" * 60)
-    logger.info("FLATTEN STEPS - Início")
-    logger.info("=" * 60)
-    
-    # Carrega processos
-    latest_file = RAW_API_DIR / 'processes_latest.json'
-    if not latest_file.exists():
-        logger.error(f"Arquivo não encontrado: {latest_file}")
-        logger.error("Execute fetch_api.py primeiro")
-        sys.exit(1)
-    
-    with open(latest_file, 'r', encoding='utf-8') as f:
-        processes = json.load(f)
-    
-    logger.info(f"Processos carregados: {len(processes)}")
-    
-    # Carrega regras
-    rules = load_rules()
-    logger.info(f"Regras carregadas: {len(rules['matchers'])}")
-    
-    # Processa
-    events = flatten_all_processes(processes, rules)
-    logger.info(f"Eventos gerados: {len(events)}")
-    
-    # Salva events_api.json
-    output_file = DATA_DIR / 'events_api.json'
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(events, f, indent=2, ensure_ascii=False)
-    
-    logger.info(f"Eventos salvos: {output_file}")
-    logger.info("FLATTEN STEPS - Concluído")
-    logger.info("=" * 60)
+    api = load_json(API_FILE)
+    rules = load_json(RULES_PATH)["matchers"]
+    all_events: List[Dict[str, Any]] = []
+    for proc in api:
+        if isinstance(proc, dict):
+            evs = flatten_proc(proc, rules)
+            all_events.extend(evs)
+    EVENTS_API.write_text(json.dumps(all_events, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[flatten_steps] OK: {EVENTS_API}")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
