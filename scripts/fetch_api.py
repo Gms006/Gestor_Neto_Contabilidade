@@ -1,119 +1,184 @@
 # -*- coding: utf-8 -*-
-"""
-Busca incremental de processos na API do Acessórias e salva snapshots em data/raw_api
-e um agregado em data/api_processes.json
+"""Busca incremental de processos na API do Acessórias com paginação resiliente."""
+from __future__ import annotations
 
-Requer:
-- .env com ACESSORIAS_TOKEN e TZ
-- scripts/config.json com base_url, endpoints, proc_status e dt_last_dh (opcional)
-"""
-import json, os, time, sys, math
-from datetime import datetime
-from typing import Dict, Any, List, Optional
-import requests
-
+import json
+from collections import OrderedDict
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
+
+from dateutil import parser
 from dotenv import load_dotenv
+
+from scripts.acessorias_client import get_process_detail, list_processes
+from scripts.utils.logger import setup_logger
+from scripts.utils.normalization import normalize_structure
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 RAW_API = DATA / "raw_api"
 CONFIG_PATH = ROOT / "scripts" / "config.json"
+SYNC_STATE = DATA / ".sync_state.json"
+
+logger = setup_logger("fetch_api")
+
+STATUS_MAP = {
+    "A": "EM ANDAMENTO",
+    "C": "CONCLUÍDO",
+    "F": "FINALIZADO",
+    "P": "PENDENTE",
+    "R": "REJEITADO",
+    "S": "SUSPENSO",
+}
+
 
 def load_config() -> Dict[str, Any]:
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    with open(CONFIG_PATH, "r", encoding="utf-8") as fp:
+        return json.load(fp)
 
-def save_config(cfg: Dict[str, Any]) -> None:
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
 
-def ensure_dirs():
+def ensure_dirs() -> None:
     DATA.mkdir(exist_ok=True)
     RAW_API.mkdir(exist_ok=True)
+    for path in RAW_API.glob("process_*.json"):
+        try:
+            path.unlink()
+        except OSError:
+            logger.warning("Não foi possível remover %s", path)
 
-def auth_header(token: str) -> Dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
-def list_processes(base_url: str, token: str, status_codes: str, page_size: int, dt_last_dh: Optional[str]) -> List[Dict[str, Any]]:
-    """
-    Percorre páginas de /processes/ListAll (usando {ProcID}* com filtros) até esgotar.
-    Como a doc expõe '/processes/{ProcID}*/?Pagina=1', adotamos 'ListAll' implicitamente: usar coringa '*' sem ID específico.
-    """
-    results: List[Dict[str, Any]] = []
-    pagina = 1
-    headers = auth_header(token)
-    while True:
-        params = {"Pagina": pagina}
-        if status_codes:
-            params["ProcStatus"] = status_codes
-        if dt_last_dh:
-            params["DtLastDH"] = dt_last_dh
-        url = f"{base_url}/processes/ListAll*"
-        r = requests.get(url, headers=headers, params=params, timeout=60)
-        if r.status_code != 200:
-            raise RuntimeError(f"HTTP {r.status_code} - {r.text}")
-        page = r.json()
-        if not isinstance(page, list):
-            raise RuntimeError("Resposta inesperada em ListAll* (esperado array JSON)")
-        if not page:
-            break
-        # snapshot por página (debug)
-        (RAW_API / f"list_{pagina:04d}.json").write_text(json.dumps(page, ensure_ascii=False, indent=2), encoding="utf-8")
-        results.extend(page)
-        pagina += 1
-    return results
+def load_sync_state() -> Dict[str, Any]:
+    if SYNC_STATE.exists():
+        with open(SYNC_STATE, "r", encoding="utf-8") as fp:
+            try:
+                return json.load(fp)
+            except json.JSONDecodeError:
+                logger.warning("Arquivo .sync_state.json inválido, reiniciando controles.")
+    return {}
 
-def get_process_detail(base_url: str, token: str, proc_id: str) -> Dict[str, Any]:
-    headers = auth_header(token)
-    url = f"{base_url}/processes/{proc_id}*/"
-    r = requests.get(url, headers=headers, params={"Pagina": 1}, timeout=60)
-    if r.status_code != 200:
-        raise RuntimeError(f"Detalhe {proc_id}: HTTP {r.status_code} - {r.text}")
-    arr = r.json()
-    if not isinstance(arr, list) or not arr:
-        return {"ProcID": proc_id, "detail": None}
-    # Alguns backends retornam lista com um item
-    return arr[0]
 
-def main():
+def save_sync_state(state: Dict[str, Any]) -> None:
+    with open(SYNC_STATE, "w", encoding="utf-8") as fp:
+        json.dump(state, fp, ensure_ascii=False, indent=2)
+
+
+def _to_dt(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return parser.parse(value)
+    except (parser.ParserError, TypeError, ValueError):
+        return None
+
+
+def compute_dt_last_dh(last_value: Optional[str]) -> Optional[str]:
+    dt_last = _to_dt(last_value)
+    if not dt_last:
+        return None
+    dt_last = dt_last - timedelta(minutes=5)
+    dt_last = dt_last.replace(microsecond=0)
+    return dt_last.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def collect_statuses(cfg: Dict[str, Any]) -> List[Optional[str]]:
+    acessorias = cfg.get("acessorias", {})
+    statuses: Iterable[Any] = acessorias.get("status_filters") or acessorias.get("proc_status") or []
+    if isinstance(statuses, str):
+        statuses = [s.strip() for s in statuses.split(",") if s.strip()]
+    statuses_list = [s if s else None for s in statuses]
+    if not statuses_list:
+        return [None]
+    return list(statuses_list)
+
+
+def deduplicate_processes(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    ordered: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+    for row in rows:
+        pid = str(row.get("ProcID") or row.get("ProcId") or row.get("proc_id") or "").strip()
+        if pid:
+            ordered[pid] = row
+        else:
+            ordered[f"_idx_{len(ordered)}"] = row
+    return list(ordered.values())
+
+
+def enrich_with_details(proc: Dict[str, Any]) -> Dict[str, Any]:
+    if proc.get("ProcPassos"):
+        return proc
+    pid = proc.get("ProcID") or proc.get("ProcId")
+    if not pid:
+        return proc
+    try:
+        detail = get_process_detail(pid)
+        merged = {**detail, **proc}
+        return merged
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Falha ao obter detalhe %s: %s", pid, exc)
+        return proc
+
+
+def apply_status_label(proc: Dict[str, Any]) -> Dict[str, Any]:
+    status_code = proc.get("ProcStatus") or proc.get("proc_status")
+    if isinstance(status_code, str):
+        label = STATUS_MAP.get(status_code.upper())
+        if label:
+            proc["ProcStatusLabel"] = label
+    return proc
+
+
+def main() -> None:
     load_dotenv()
     ensure_dirs()
     cfg = load_config()
-    token = os.getenv("ACESSORIAS_TOKEN")
-    if not token:
-        raise RuntimeError("Faltou ACESSORIAS_TOKEN no .env")
-    base = cfg["acessorias"]["base_url"]
-    status_codes = cfg["acessorias"].get("proc_status", "A,C")
-    page_size = cfg["acessorias"].get("page_size", 20)  # mantido para futuro uso
-    dt_last_dh = cfg["acessorias"].get("dt_last_dh")
+    sync_state = load_sync_state()
+    last_dh = (sync_state.get("api") or {}).get("processes_last_dh")
+    dt_last_dh = compute_dt_last_dh(last_dh)
 
-    print(f"[fetch_api] Coletando processos (status={status_codes}, dt_last_dh={dt_last_dh})...")
-    lst = list_processes(base, token, status_codes, page_size, dt_last_dh)
+    statuses = collect_statuses(cfg)
+    logger.info(
+        "[fetch_api] Coletando processos (statuses=%s, dt_last_dh=%s)...",
+        statuses,
+        dt_last_dh,
+    )
 
-    # Buscar detalhes (ProcPassos) por ProcID
-    enriched: List[Dict[str, Any]] = []
-    for i, item in enumerate(lst, 1):
-        pid = str(item.get("ProcID"))
+    collected: List[Dict[str, Any]] = []
+    for status in statuses:
         try:
-            detail = get_process_detail(base, token, pid)
-        except Exception as e:
-            print(f"[fetch_api] ERRO detalhe {pid}: {e}")
-            detail = {"ProcID": pid, "detail_error": str(e)}
-        enriched.append(detail)
-        if i % 20 == 0:
-            print(f"  Detalhes {i}/{len(lst)}")
+            rows = list_processes(status=status, dt_last_dh=dt_last_dh)
+            logger.info("Status %s -> %d registros", status or "ALL", len(rows))
+            collected.extend(rows)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Erro list_processes(status=%s): %s", status, exc)
+            raise
 
-    # salvar agregado
-    outpath = DATA / "api_processes.json"
-    outpath.write_text(json.dumps(enriched, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[fetch_api] OK: {outpath}")
+    unique = deduplicate_processes(collected)
+    logger.info("Total consolidado após deduplicação: %d", len(unique))
 
-    # Atualiza dt_last_dh para incremental (usa agora)
-    now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    cfg["acessorias"]["dt_last_dh"] = now_utc
-    save_config(cfg)
-    print(f"[fetch_api] Atualizado dt_last_dh -> {now_utc}")
+    enriched: List[Dict[str, Any]] = []
+    for idx, proc in enumerate(unique, start=1):
+        merged = enrich_with_details(proc)
+        normalized = normalize_structure(merged)
+        normalized = apply_status_label(normalized)
+        enriched.append(normalized)
+        (RAW_API / f"process_{idx:05d}.json").write_text(
+            json.dumps(normalized, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    output_path = DATA / "api_processes.json"
+    output_path.write_text(json.dumps(enriched, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("[fetch_api] OK: %s", output_path)
+
+    now_utc = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    sync_state.setdefault("api", {})["processes_last_dh"] = now_utc
+    save_sync_state(sync_state)
+    logger.info("[fetch_api] Atualizado processes_last_dh -> %s", now_utc)
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("fetch_api falhou: %s", exc)
+        raise

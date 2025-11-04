@@ -1,243 +1,99 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-BR">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gestão Operacional Fiscal</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <link rel="stylesheet" href="styles.css">
+  <meta charset="utf-8" />
+  <title>Gestor Neto Contabilidade — Portal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Tailwind (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="./styles.css" />
 </head>
-<body class="bg-gray-50">
-    <!-- Header -->
-    <header class="bg-blue-600 text-white shadow-lg">
-        <div class="container mx-auto px-4 py-6">
-            <h1 class="text-3xl font-bold">Sistema de Gestão Operacional</h1>
-            <p class="text-blue-100 mt-1">Dashboard Fiscal - Análise e Monitoramento</p>
-        </div>
-    </header>
-
-    <!-- Navigation -->
-    <nav class="bg-white shadow-md sticky top-0 z-50">
-        <div class="container mx-auto px-4">
-            <ul class="flex space-x-1">
-                <li><button onclick="showPage('dashboard')" class="nav-btn active" data-page="dashboard">Dashboard</button></li>
-                <li><button onclick="showPage('obrigacoes')" class="nav-btn" data-page="obrigacoes">Obrigações</button></li>
-                <li><button onclick="showPage('processos')" class="nav-btn" data-page="processos">Processos</button></li>
-                <li><button onclick="showPage('alertas')" class="nav-btn" data-page="alertas">Alertas</button></li>
-                <li><button onclick="showPage('empresas')" class="nav-btn" data-page="empresas">Empresas</button></li>
-            </ul>
-        </div>
+<body class="bg-slate-50 text-slate-800">
+  <a href="#conteudo" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:bg-white focus:px-3 focus:py-2 focus:rounded">Pular para o conteúdo</a>
+  <header class="bg-white border-b sticky top-0 z-30 shadow-sm">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+      <h1 class="text-xl font-semibold tracking-tight">Gestor — Portal Operacional</h1>
+      <div class="flex gap-2">
+        <button id="btnRefresh" class="btn" type="button" aria-label="Atualizar dados">🔄 Atualizar dados</button>
+        <a class="btn-outline" href="../README.md" target="_blank" rel="noopener">Ajuda</a>
+      </div>
+    </div>
+    <nav class="max-w-7xl mx-auto px-4 pb-2" aria-label="Seções do portal">
+      <ul class="tabs" role="tablist">
+        <li><a href="#tab=dashboard" class="tab active" role="tab" aria-controls="view-dashboard" aria-selected="true">Dashboard</a></li>
+        <li><a href="#tab=obrigacoes" class="tab" role="tab" aria-controls="view-obrigacoes">Obrigações</a></li>
+        <li><a href="#tab=processos" class="tab" role="tab" aria-controls="view-processos">Processos</a></li>
+        <li><a href="#tab=alertas" class="tab" role="tab" aria-controls="view-alertas">Alertas</a></li>
+        <li><a href="#tab=empresas" class="tab" role="tab" aria-controls="view-empresas">Empresas</a></li>
+      </ul>
     </nav>
+  </header>
 
-    <!-- Main Content -->
-    <main class="container mx-auto px-4 py-8">
-        
-        <!-- Dashboard Page -->
-        <div id="page-dashboard" class="page active">
-            <h2 class="text-2xl font-bold mb-6">Dashboard Geral</h2>
-            
-            <!-- Cards KPI -->
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-                <div class="stat-card bg-blue-500">
-                    <div class="stat-label">Processos Finalizados</div>
-                    <div class="stat-value" id="kpi-finalizados">0</div>
-                </div>
-                <div class="stat-card bg-green-500">
-                    <div class="stat-label">Tempo Médio (dias)</div>
-                    <div class="stat-value" id="kpi-tempo-medio">0</div>
-                </div>
-                <div class="stat-card bg-yellow-500">
-                    <div class="stat-label">SN em Risco</div>
-                    <div class="stat-value" id="kpi-sn-risco">0</div>
-                </div>
-                <div class="stat-card bg-red-500">
-                    <div class="stat-label">REINF em Risco</div>
-                    <div class="stat-value" id="kpi-reinf-risco">0</div>
-                </div>
-            </div>
-
-            <!-- Gráficos -->
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-                <div class="card">
-                    <h3 class="text-xl font-semibold mb-4">Obrigações por Competência</h3>
-                    <canvas id="chart-competencia"></canvas>
-                </div>
-                <div class="card">
-                    <h3 class="text-xl font-semibold mb-4">DIFAL por Tipo</h3>
-                    <canvas id="chart-difal"></canvas>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div class="card">
-                    <h3 class="text-xl font-semibold mb-4">Fora do DAS</h3>
-                    <canvas id="chart-fora-das"></canvas>
-                </div>
-                <div class="card">
-                    <h3 class="text-xl font-semibold mb-4">Top 5 Responsáveis</h3>
-                    <div id="ranking-responsaveis" class="space-y-2"></div>
-                </div>
-            </div>
+  <main id="conteudo" class="max-w-7xl mx-auto px-4 py-6 space-y-8" tabindex="-1">
+    <!-- DASHBOARD -->
+    <section id="view-dashboard" class="view" role="tabpanel" aria-labelledby="tab-dashboard">
+      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-5" id="cards" aria-live="polite"></div>
+      <div class="grid md:grid-cols-2 gap-6">
+        <div class="panel">
+          <h3 class="panel-title">REINF — Obrigatória x Dispensa (por competência)</h3>
+          <canvas id="chReinf" aria-label="Gráfico de barras REINF" role="img"></canvas>
         </div>
-
-        <!-- Obrigações Page -->
-        <div id="page-obrigacoes" class="page">
-            <div class="flex justify-between items-center mb-6">
-                <h2 class="text-2xl font-bold">Obrigações Fiscais</h2>
-                <button onclick="exportCSV('obrigacoes')" class="btn-primary">Exportar CSV</button>
-            </div>
-
-            <!-- Filtros -->
-            <div class="card mb-6">
-                <h3 class="text-lg font-semibold mb-4">Filtros</h3>
-                <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
-                    <select id="filter-categoria" class="input">
-                        <option value="">Todas Categorias</option>
-                        <option value="efd_reinf">EFD-Reinf</option>
-                        <option value="efd_contrib">EFD Contribuições</option>
-                        <option value="difal">DIFAL</option>
-                        <option value="fora_das">Fora do DAS</option>
-                        <option value="finalizacao">Finalização</option>
-                    </select>
-                    <select id="filter-status" class="input">
-                        <option value="">Todos Status</option>
-                        <option value="Obrigatória">Obrigatória</option>
-                        <option value="Dispensada">Dispensada</option>
-                        <option value="Finalizado">Finalizado</option>
-                    </select>
-                    <select id="filter-competencia" class="input">
-                        <option value="">Todas Competências</option>
-                    </select>
-                    <input type="text" id="filter-empresa" placeholder="Buscar empresa..." class="input">
-                    <button onclick="applyFilters()" class="btn-primary">Aplicar Filtros</button>
-                </div>
-            </div>
-
-            <!-- Tabela -->
-            <div class="card overflow-x-auto">
-                <table class="data-table" id="table-obrigacoes">
-                    <thead>
-                        <tr>
-                            <th>Proc ID</th>
-                            <th>Empresa</th>
-                            <th>CNPJ</th>
-                            <th>Categoria</th>
-                            <th>Subtipo</th>
-                            <th>Status</th>
-                            <th>Responsável</th>
-                            <th>Competência</th>
-                            <th>Data Evento</th>
-                            <th>Fonte</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tbody-obrigacoes">
-                        <!-- Preenchido via JS -->
-                    </tbody>
-                </table>
-            </div>
+        <div class="panel">
+          <h3 class="panel-title">EFD Contrib — Obrigatória x Dispensa (por competência)</h3>
+          <canvas id="chEfd" aria-label="Gráfico de barras EFD Contribuições" role="img"></canvas>
         </div>
-
-        <!-- Processos Page -->
-        <div id="page-processos" class="page">
-            <div class="flex justify-between items-center mb-6">
-                <h2 class="text-2xl font-bold">Processos Finalizados</h2>
-                <button onclick="exportCSV('processos')" class="btn-primary">Exportar CSV</button>
-            </div>
-
-            <div class="card overflow-x-auto">
-                <table class="data-table" id="table-processos">
-                    <thead>
-                        <tr>
-                            <th>Proc ID</th>
-                            <th>Empresa</th>
-                            <th>CNPJ</th>
-                            <th>Competência</th>
-                            <th>Início</th>
-                            <th>Conclusão</th>
-                            <th>Lead Time (dias)</th>
-                            <th>Responsável</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tbody-processos">
-                        <!-- Preenchido via JS -->
-                    </tbody>
-                </table>
-            </div>
+        <div class="panel">
+          <h3 class="panel-title">DIFAL por tipo</h3>
+          <canvas id="chDifal" aria-label="Gráfico de rosca DIFAL" role="img"></canvas>
         </div>
-
-        <!-- Alertas Page -->
-        <div id="page-alertas" class="page">
-            <h2 class="text-2xl font-bold mb-6">Alertas e Avisos</h2>
-
-            <!-- SN em Risco -->
-            <div class="card mb-6">
-                <h3 class="text-xl font-semibold mb-4 text-yellow-600">⚠️ Simples Nacional em Risco (Prazo dia 20)</h3>
-                <div id="alertas-sn" class="space-y-2"></div>
-            </div>
-
-            <!-- REINF em Risco -->
-            <div class="card mb-6">
-                <h3 class="text-xl font-semibold mb-4 text-orange-600">⚠️ EFD-Reinf em Risco (Prazo dia 15)</h3>
-                <div id="alertas-reinf" class="space-y-2"></div>
-            </div>
-
-            <!-- Bloqueantes -->
-            <div class="card mb-6">
-                <h3 class="text-xl font-semibold mb-4 text-red-600">🚫 Passos Bloqueantes</h3>
-                <div id="alertas-bloqueantes" class="space-y-2"></div>
-            </div>
-
-            <!-- Divergências -->
-            <div class="card mb-6">
-                <h3 class="text-xl font-semibold mb-4 text-purple-600">⚡ Divergências API vs E-mail</h3>
-                <div id="alertas-divergencias" class="space-y-2"></div>
-            </div>
-
-            <!-- Não Mapeados -->
-            <div class="card">
-                <h3 class="text-xl font-semibold mb-4 text-blue-600">ℹ️ Eventos Não Mapeados na API</h3>
-                <div id="alertas-nao-mapeados" class="space-y-2"></div>
-            </div>
+        <div class="panel">
+          <h3 class="panel-title">Dia do mês de fechamento (média/mediana)</h3>
+          <canvas id="chFechamento" aria-label="Gráfico de linha de fechamento" role="img"></canvas>
         </div>
+      </div>
+    </section>
 
-        <!-- Empresas Page -->
-        <div id="page-empresas" class="page">
-            <h2 class="text-2xl font-bold mb-6">Empresas</h2>
+    <!-- OBRIGAÇÕES -->
+    <section id="view-obrigacoes" class="view hidden" role="tabpanel" aria-labelledby="tab-obrigacoes">
+      <div class="sr-only" id="obrigacoes-help">Use os filtros para localizar obrigações por empresa, competência ou responsável.</div>
+      <div id="filters-obrig" class="filters" aria-describedby="obrigacoes-help"></div>
+      <div id="table-obrig" class="table-wrap" role="region" aria-live="polite"></div>
+      <div class="pager" id="pager-obrig"></div>
+    </section>
 
-            <!-- Seletor de empresa -->
-            <div class="card mb-6">
-                <label class="block text-sm font-medium mb-2">Selecionar Empresa:</label>
-                <select id="select-empresa" onchange="loadEmpresaDetail()" class="input max-w-md">
-                    <option value="">Escolha uma empresa...</option>
-                </select>
-            </div>
+    <!-- PROCESSOS -->
+    <section id="view-processos" class="view hidden" role="tabpanel" aria-labelledby="tab-processos">
+      <div id="filters-proc" class="filters"></div>
+      <div id="table-proc" class="table-wrap" role="region" aria-live="polite"></div>
+      <div class="pager" id="pager-proc"></div>
+    </section>
 
-            <!-- Detalhes da empresa -->
-            <div id="empresa-detail" class="hidden">
-                <div class="card mb-6">
-                    <h3 class="text-xl font-semibold mb-2" id="empresa-nome"></h3>
-                    <p class="text-gray-600" id="empresa-cnpj"></p>
-                </div>
+    <!-- ALERTAS -->
+    <section id="view-alertas" class="view hidden" role="tabpanel" aria-labelledby="tab-alertas">
+      <div class="flex flex-wrap gap-2 mb-3" role="group" aria-label="Filtros rápidos de alertas">
+        <button class="chip active" data-alert="all" type="button">Todos</button>
+        <button class="chip" data-alert="risco" type="button">Somente em risco</button>
+        <button class="chip" data-alert="bloq" type="button">Somente bloqueantes</button>
+      </div>
+      <div id="alerts-list" class="space-y-4" aria-live="polite"></div>
+    </section>
 
-                <div class="card">
-                    <h3 class="text-lg font-semibold mb-4">Timeline de Eventos</h3>
-                    <div id="empresa-timeline" class="space-y-4"></div>
-                </div>
-            </div>
-        </div>
+    <!-- EMPRESAS -->
+    <section id="view-empresas" class="view hidden" role="tabpanel" aria-labelledby="tab-empresas">
+      <div class="mb-3">
+        <label class="sr-only" for="q-emp">Buscar empresa ou CNPJ</label>
+        <input id="q-emp" class="input" placeholder="🔎 Buscar empresa ou CNPJ" aria-label="Buscar empresa ou CNPJ" />
+      </div>
+      <div id="cards-empresas" class="grid gap-4 md:grid-cols-2"></div>
+    </section>
+  </main>
 
-    </main>
+  <footer class="max-w-7xl mx-auto px-4 py-10 text-xs text-slate-500">
+    <p>Leitura local de <code>../data/*.json</code>. Sem backend. © Neto Contabilidade</p>
+  </footer>
 
-    <!-- Footer -->
-    <footer class="bg-gray-800 text-white py-6 mt-12">
-        <div class="container mx-auto px-4 text-center">
-            <p>&copy; 2025 Sistema de Gestão Operacional. Todos os direitos reservados.</p>
-            <p class="text-sm text-gray-400 mt-2">Última atualização: <span id="last-update"></span></p>
-        </div>
-    </footer>
-
-    <script src="app.js"></script>
+  <script type="module" src="./app.js"></script>
 </body>
 </html>
