@@ -1,0 +1,18 @@
+{
+  "ProcID": "6377-01-01 00:00:00",
+  "ProcNome": "Contabilidade Anual 2025",
+  "ProcTitulo": "Contabilidade Anual 2025",
+  "ProcCriador": "João Guimarães",
+  "ProcGestor": "83480",
+  "ProcObservacoes": "Acompanhamento da Contabilidade anual em 2025.",
+  "ProcInicio": "2025-10-01 00:00:00",
+  "ProcDiasCorridos": "35",
+  "ProcConclusao": "2027-03-01 00:00:00",
+  "ProcDepartamento": "Contábil",
+  "ProcStatus": "Em andamento",
+  "ProcPorcentagem": "0.00",
+  "DtLastDH": "2025-10-01 13:46:43",
+  "EmpNome": "TW SAUDE MENTAL LTDA",
+  "EmpID": "477",
+  "EmpCNPJ": "46.510.176/0001-94"
+}

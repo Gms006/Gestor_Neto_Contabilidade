@@ -1,0 +1,18 @@
+{
+  "ProcID": "7001-01-01 00:00:00",
+  "ProcNome": "Lucro Presumido - Serviços",
+  "ProcTitulo": "Lucro Presumido - Serviços",
+  "ProcCriador": "João Guimarães",
+  "ProcGestor": "82860",
+  "ProcObservacoes": "",
+  "ProcInicio": "2025-11-01 00:00:00",
+  "ProcDiasCorridos": "4",
+  "ProcConclusao": "2025-11-04 00:00:00",
+  "ProcDepartamento": "Fiscal",
+  "ProcStatus": "Concluído",
+  "ProcPorcentagem": "100.00",
+  "DtLastDH": "2025-11-04 16:22:31",
+  "EmpNome": "FCGOMES SERVICOS MEDICOS LTDA",
+  "EmpID": "270",
+  "EmpCNPJ": "27.243.364/0001-59"
+}

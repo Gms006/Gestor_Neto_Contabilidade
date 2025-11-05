@@ -1,300 +1,63 @@
-# Changelog - Melhorias Implementadas
+# CHANGELOG
 
-## 📅 Data: Novembro 2025
+## 2025-11-05 - Atualização de Padronização e Correção de API
 
-## 🎯 Objetivo
-Integrar o sistema com a API do Acessórias, implementar persistência local com banco de dados SQLite, e criar servidor REST com FastAPI para funcionamento offline e online.
+Este *changelog* detalha as alterações realizadas no projeto para corrigir a integração com a API do Acessórias e padronizar o ambiente de desenvolvimento para o padrão **ESM (ECMAScript Modules)**.
 
----
+### 1. Padronização do Projeto (ESM)
 
-## ✨ Novas Funcionalidades
+*   **`backend/package.json`**:
+    *   Adicionado `"type": "module"` para forçar o uso do padrão ESM.
+    *   Atualizado o script `dev` para usar `cross-env TS_NODE_PROJECT=tsconfig.json` para garantir o carregamento correto do `tsconfig.json` em modo *watch*.
+    *   Instalado `cross-env` como dependência de desenvolvimento.
+*   **`backend/tsconfig.json`**:
+    *   Atualizado `target` para `"ES2022"`.
+    *   Atualizado `module` para `"ES2022"`.
+    *   Atualizado `moduleResolution` para `"Bundler"`.
+    *   Adicionado `"allowSyntheticDefaultImports": true`.
 
-### 1. Banco de Dados SQLite com SQLAlchemy
+### 2. Correção e Flexibilização da API do Acessórias
 
-#### Arquivos Criados:
-- **`scripts/db.py`** - Modelos e helpers de banco de dados
+O erro original de **404 Not Found** foi corrigido com a implementação de uma lógica de construção de URL mais flexível e a confirmação da estrutura correta da API na documentação.
 
-#### Modelos Implementados:
-- **Company**: Empresas (CNPJ, nome)
-- **Process**: Processos da API (status, datas, gestor, etc.)
-- **Delivery**: Obrigações fiscais (REINF, EFD, DIFAL)
+*   **`backend/.env`**:
+    *   Adicionadas as variáveis de ambiente: `ACESSORIAS_API_BASE`, `ACESSORIAS_API_VERSION` e `ACESSORIAS_PATH_LANG` para permitir a configuração da URL da API sem alterar o código-fonte.
+*   **`backend/src/lib/env.ts`**:
+    *   Atualizado para carregar as novas variáveis de ambiente.
+*   **`backend/src/clients/acessoriasClient.ts`**:
+    *   Implementada a função `buildUrl` para montar a URL completa da API de forma dinâmica, considerando `BASE_URL`, `API_BASE`, `API_VERSION` e o nome do recurso (ex: `/companies`).
+    *   Adicionado o cabeçalho `User-Agent: NetoContabilidade-Gestor/1.0` conforme boa prática.
+    *   Ajustado o `fetchWithRetry` para usar a URL completa gerada pela `buildUrl`.
+    *   Implementado o mapeamento de recursos (`companies`, `processes`, `deliveries`) para português (`empresas`, `processos`, `entregas`) via `ACESSORIAS_PATH_LANG`.
 
-#### Funcionalidades:
-- Upsert automático (insert ou update)
-- Chaves naturais e índices otimizados
-- WAL mode para melhor concorrência
-- Relacionamentos entre tabelas
+### 3. Atualização do Banco de Dados (Prisma)
 
-### 2. Servidor REST com FastAPI
+Os modelos do Prisma foram atualizados para refletir a estrutura de dados solicitada, focando em `Company`, `Process` e `Delivery` com relações claras.
 
-#### Arquivo Criado:
-- **`scripts/server.py`** - Servidor HTTP com API REST
+*   **`backend/prisma/schema.prisma`**:
+    *   Os modelos `Empresa`, `Processo`, `Entrega` e `Etapa` foram substituídos por `Company`, `Process`, `Delivery` e `SyncCursor` (novo), seguindo a estrutura solicitada.
+    *   As relações entre `Company` e `Process`, e `Process` e `Delivery` foram ajustadas.
+*   **Migração**:
+    *   O `prisma generate` e `prisma migrate deploy` foram executados para aplicar as mudanças no banco de dados.
 
-#### Endpoints Implementados:
-- `GET /api/processes` - Lista processos com filtros
-- `GET /api/companies` - Lista empresas
-- `GET /api/deliveries` - Lista obrigações fiscais
-- `GET /api/kpis` - KPIs pré-computados
-- `POST /api/sync` - Dispara sincronização
-- `GET /health` - Health check
+### 4. Implementação de Endpoints e Lógica de Status
 
-#### Recursos:
-- CORS habilitado
-- Fallback automático para JSON
-- Serve arquivos estáticos do frontend
-- Documentação automática em `/docs`
-
-### 3. Cliente API Aprimorado
-
-#### Arquivo Atualizado:
-- **`scripts/acessorias_client.py`**
-
-#### Melhorias:
-- Rate budget configurável via `.env` (`ACESSORIAS_RATE_BUDGET`)
-- Novos métodos específicos:
-  - `list_deliveries_listall()` - Delta diário com DtLastDH
-  - `list_deliveries_by_cnpj()` - Histórico por empresa
-- Backoff exponencial para erro 429
-- Respeita header `Retry-After`
-- Logs estruturados sem expor tokens
-
-### 4. Scripts de Coleta Atualizados
-
-#### Arquivos Modificados:
-- **`scripts/fetch_api.py`**
-- **`scripts/fetch_deliveries.py`**
-- **`scripts/fetch_companies.py`**
-
-#### Melhorias:
-- Persistência no banco SQLite
-- Geração de snapshots JSON para fallback
-- Busca de processos concluídos
-- Deliveries: histórico (6 meses) + delta diário
-- Categorização automática (REINF, EFD, DIFAL)
-- Subtipo DIFAL (comercialização, consumo/imobilizado)
-
-### 5. Processamento com Banco de Dados
-
-#### Arquivos Modificados:
-- **`scripts/fuse_sources.py`**
-- **`scripts/build_processes_kpis_alerts.py`**
-
-#### Melhorias:
-- Leitura prioritária do banco de dados
-- Fallback para JSON se banco indisponível
-- Cálculo de dia médio/mediano de fechamento
-- KPIs enriquecidos
-
-### 6. Frontend com Fallback Automático
-
-#### Arquivo Modificado:
-- **`web/app.js`**
-
-#### Melhorias:
-- Função `apiOrJson()` para fallback automático
-- Tenta API REST primeiro
-- Se falhar, usa arquivos JSON locais
-- Atualização transparente para o usuário
-
-### 7. Orquestração Atualizada
-
-#### Arquivo Modificado:
-- **`run_all.ps1`**
-
-#### Melhorias:
-- Opção `-Serve` inicia servidor FastAPI (porta 8088)
-- Mantém compatibilidade com fluxo existente
-- Abre navegador automaticamente
+*   **`backend/src/lib/utils.ts`**:
+    *   Criada a função `mapProcessStatus` para padronizar o status do processo em `CONCLUIDO`, `EM_ANDAMENTO` ou `OUTRO`, com base em `statusRaw` e `progress`.
+*   **`backend/src/routes/data.ts`**:
+    *   Removidas as rotas antigas (`/empresas`, `/processos`, etc.).
+    *   Implementadas as novas rotas:
+        *   `GET /api/processes/summary`: Retorna a contagem de processos por status (`concluidos`, `em_andamento`, `outros`).
+        *   `GET /api/processes`: Implementa listagem paginada com filtros por `status` (`concluido`, `em_andamento`, `todos`), `empresa`, `titulo` e ordenação.
+*   **`backend/src/repositories/acessoriasRepo.ts`**:
+    *   Atualizado para usar os novos nomes de modelos (`Company`, `Process`, `Delivery`) e a lógica de *upsert* com base no `externalId`.
+*   **`backend/src/services/syncService.ts`**:
+    *   Atualizado para usar os novos nomes de funções de repositório e a lógica de *sync* com base nos novos modelos.
 
 ---
+**Próximos Passos para o Usuário:**
 
-## 📝 Arquivos de Configuração
-
-### Atualizado: `.env`
-```env
-# Novo: Banco de dados
-DB_URL=sqlite:///data/econtrole.db
-
-# Novo: Rate limiting
-ACESSORIAS_RATE_BUDGET=70
-```
-
-### Atualizado: `requirements.txt`
-```
-SQLAlchemy>=2.0,<3
-alembic>=1.12,<2
-fastapi>=0.104,<1
-uvicorn[standard]>=0.24,<1
-```
-
----
-
-## 📚 Documentação
-
-### Arquivo Criado:
-- **`README.md`** - Documentação completa do sistema
-
-#### Conteúdo:
-- Guia de instalação
-- Instruções de uso
-- Documentação da API
-- Troubleshooting
-- Estrutura do banco de dados
-- Fluxo de dados
-
----
-
-## 🔧 Melhorias Técnicas
-
-### Rate Limiting
-- Configurável: 70 req/min (padrão) = ~0,86s entre chamadas
-- Tratamento robusto de erro 429
-- Retry com backoff exponencial
-
-### Resiliência
-Sistema funciona em três camadas:
-1. **API REST** (servidor FastAPI)
-2. **Banco SQLite** (se API offline)
-3. **Arquivos JSON** (se banco indisponível)
-
-### Segurança
-- Token nunca exposto em logs
-- Variáveis sensíveis apenas no `.env`
-- CORS configurável
-
-### Performance
-- Índices otimizados no banco
-- WAL mode no SQLite
-- Paginação em todos os endpoints
-- Cache no frontend
-
----
-
-## 📊 KPIs Adicionados
-
-### Novos Indicadores:
-- **Dia médio de fechamento**: Média do dia do mês em que processos são concluídos
-- **Dia mediano de fechamento**: Mediana do dia de conclusão
-- **Contadores por categoria**: REINF, EFD Contrib, DIFAL
-- **Contadores por status**: Obrigatória, Dispensada, Pendente
-
----
-
-## 🐛 Correções
-
-### Deliveries
-- ✅ Corrigido: histórico agora usa endpoint por CNPJ (não ListAll)
-- ✅ Corrigido: delta diário usa ListAll com DtLastDH obrigatório
-- ✅ Corrigido: categorização automática funciona corretamente
-
-### Dashboard
-- ✅ Corrigido: cards REINF/EFD/DIFAL agora populam com dados reais
-- ✅ Corrigido: processos concluídos aparecem na listagem
-
-### API
-- ✅ Corrigido: rate limit respeitado com orçamento configurável
-- ✅ Corrigido: tratamento de 204 No Content
-
----
-
-## 🔄 Fluxo de Dados Atualizado
-
-```
-1. API Acessórias
-   ↓
-2. Scripts fetch_* (coleta)
-   ↓
-3. Banco SQLite (persistência)
-   ↓
-4. Snapshots JSON (fallback)
-   ↓
-5. Scripts fuse/build (processamento)
-   ↓
-6. Servidor FastAPI (exposição)
-   ↓
-7. Frontend (visualização)
-```
-
----
-
-## 📦 Estrutura de Arquivos
-
-### Novos Arquivos:
-```
-scripts/
-├── db.py                    # NOVO: Modelos SQLAlchemy
-└── server.py                # NOVO: Servidor FastAPI
-
-data/
-└── econtrole.db            # NOVO: Banco SQLite
-
-README.md                    # NOVO: Documentação completa
-CHANGELOG.md                 # NOVO: Este arquivo
-```
-
-### Arquivos Modificados:
-```
-.env                         # Adicionado DB_URL e ACESSORIAS_RATE_BUDGET
-requirements.txt             # Adicionado SQLAlchemy, FastAPI, Uvicorn
-run_all.ps1                  # Adicionado suporte a servidor FastAPI
-web/app.js                   # Adicionado apiOrJson() para fallback
-
-scripts/
-├── acessorias_client.py     # Rate budget + novos métodos deliveries
-├── fetch_api.py             # Persistência no banco
-├── fetch_deliveries.py      # Histórico por CNPJ + delta ListAll
-├── fetch_companies.py       # Persistência no banco
-├── fuse_sources.py          # Leitura do banco
-└── build_processes_kpis_alerts.py  # KPIs de dia de fechamento
-```
-
----
-
-## ✅ Definition of Done
-
-Todos os requisitos foram implementados:
-
-- [x] Integração correta com API Acessórias
-- [x] Processos concluídos sendo buscados
-- [x] Persistência em banco SQLite local
-- [x] Atualização contínua com upsert
-- [x] Snapshots JSON para fallback
-- [x] Deliveries: histórico por CNPJ
-- [x] Deliveries: delta via ListAll + DtLastDH
-- [x] Rate limit 429 com orçamento configurável
-- [x] run_all.ps1 funcionando
-- [x] Servidor FastAPI com GET /api/*
-- [x] Frontend consome API com fallback
-- [x] Dashboard populado com dados reais
-- [x] Dia médio/mediano de fechamento calculado
-- [x] Logs limpos sem expor tokens
-
----
-
-## 🚀 Como Usar
-
-### Instalação:
-```powershell
-pip install -r requirements.txt
-```
-
-### Coleta de Dados:
-```powershell
-.\run_all.ps1
-```
-
-### Iniciar Servidor:
-```powershell
-.\run_all.ps1 -Serve
-```
-
-### Acessar:
-- Frontend: http://localhost:8088/web/
-- API: http://localhost:8088/api/
-- Docs: http://localhost:8088/docs
-
----
-
-## 📞 Suporte
-
-Consulte o `README.md` para documentação completa e troubleshooting.
+1.  Descompacte o ZIP.
+2.  Execute `npm install` na pasta `backend`.
+3.  Ajuste as variáveis `ACESSORIAS_API_BASE`, `ACESSORIAS_API_VERSION` e `ACESSORIAS_PATH_LANG` no `backend/.env` conforme a documentação da API.
+4.  Execute `npm run dev` para iniciar o servidor e a sincronização.

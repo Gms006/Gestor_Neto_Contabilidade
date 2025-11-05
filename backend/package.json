@@ -1,0 +1,48 @@
+{
+  "name": "gestao-contabil-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "API do Gestor Neto Contabilidade (Express + Prisma + TS)",
+  "main": "dist/server.js",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "cross-env TS_NODE_PROJECT=tsconfig.json ts-node-dev --respawn --transpile-only src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "prisma": "prisma",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "axios": "^1.13.2",
+    "cors": "^2.8.5",
+    "date-fns": "^4.1.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "node-cron": "^4.2.1",
+    "pino": "^10.1.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.30",
+    "@types/node-cron": "^3.0.11",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "cross-env": "^10.1.0",
+    "eslint": "^8.57.0",
+    "pino-pretty": "^13.1.2",
+    "prettier": "^3.2.5",
+    "prisma": "^5.22.0",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.4.5"
+  }
+}

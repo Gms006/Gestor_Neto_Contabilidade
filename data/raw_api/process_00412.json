@@ -1,0 +1,18 @@
+{
+  "ProcID": "5115-01-01 00:00:00",
+  "ProcNome": "Contabilidade Anual 2025",
+  "ProcTitulo": "Contabilidade Anual 2025",
+  "ProcCriador": "João Guimarães",
+  "ProcGestor": "83480",
+  "ProcObservacoes": "Acompanhamento da Contabilidade anual em 2025.",
+  "ProcInicio": "2025-10-01 00:00:00",
+  "ProcDiasCorridos": "35",
+  "ProcConclusao": "2027-03-01 00:00:00",
+  "ProcDepartamento": "Contábil",
+  "ProcStatus": "Em andamento",
+  "ProcPorcentagem": "0.00",
+  "DtLastDH": "2025-10-01 09:55:41",
+  "EmpNome": "ANHANGUERA PASTAGEM COMERCIO LTDA",
+  "EmpID": "73",
+  "EmpCNPJ": "33.562.384/0001-95"
+}

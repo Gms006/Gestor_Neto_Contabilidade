@@ -1,0 +1,20 @@
+{
+  "processes": {
+    "by_status": {},
+    "avg_days_concluded": null,
+    "closing_day_avg": null,
+    "closing_day_median": null
+  },
+  "obligations": {
+    "by_subtipo": {},
+    "by_status": {}
+  },
+  "companies": {
+    "obligations_totals": {
+      "entregues": 0,
+      "atrasadas": 0,
+      "proximos30": 0,
+      "futuras30": 0
+    }
+  }
+}

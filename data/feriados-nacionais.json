@@ -1,0 +1,220 @@
+{
+  "feriadosNacionais": [
+    {
+      "nome": "Confraternização Universal",
+      "data": "01-01",
+      "tipo": "Nacional",
+      "recorrente": true
+    },
+    {
+      "nome": "Carnaval",
+      "data": "variavel",
+      "tipo": "Nacional",
+      "recorrente": true,
+      "observacao": "47 dias antes da Páscoa"
+    },
+    {
+      "nome": "Sexta-feira Santa",
+      "data": "variavel",
+      "tipo": "Nacional",
+      "recorrente": true,
+      "observacao": "2 dias antes da Páscoa"
+    },
+    {
+      "nome": "Tiradentes",
+      "data": "04-21",
+      "tipo": "Nacional",
+      "recorrente": true
+    },
+    {
+      "nome": "Dia do Trabalho",
+      "data": "05-01",
+      "tipo": "Nacional",
+      "recorrente": true
+    },
+    {
+      "nome": "Corpus Christi",
+      "data": "variavel",
+      "tipo": "Nacional",
+      "recorrente": true,
+      "observacao": "60 dias após a Páscoa"
+    },
+    {
+      "nome": "Independência do Brasil",
+      "data": "09-07",
+      "tipo": "Nacional",
+      "recorrente": true
+    },
+    {
+      "nome": "Nossa Senhora Aparecida",
+      "data": "10-12",
+      "tipo": "Nacional",
+      "recorrente": true
+    },
+    {
+      "nome": "Finados",
+      "data": "11-02",
+      "tipo": "Nacional",
+      "recorrente": true
+    },
+    {
+      "nome": "Proclamação da República",
+      "data": "11-15",
+      "tipo": "Nacional",
+      "recorrente": true
+    },
+    {
+      "nome": "Consciência Negra",
+      "data": "11-20",
+      "tipo": "Nacional",
+      "recorrente": true,
+      "observacao": "Feriado nacional desde 2024"
+    },
+    {
+      "nome": "Natal",
+      "data": "12-25",
+      "tipo": "Nacional",
+      "recorrente": true
+    }
+  ],
+  "feriadosEstaduais": {
+    "SP": [
+      {
+        "nome": "Revolução Constitucionalista",
+        "data": "07-09",
+        "tipo": "Estadual",
+        "uf": "SP",
+        "recorrente": true
+      }
+    ],
+    "RJ": [
+      {
+        "nome": "Dia de São Jorge",
+        "data": "04-23",
+        "tipo": "Estadual",
+        "uf": "RJ",
+        "recorrente": true
+      },
+      {
+        "nome": "Dia do Comércio",
+        "data": "10-16",
+        "tipo": "Estadual",
+        "uf": "RJ",
+        "recorrente": true
+      },
+      {
+        "nome": "Consciência Negra",
+        "data": "11-20",
+        "tipo": "Estadual",
+        "uf": "RJ",
+        "recorrente": true
+      }
+    ],
+    "MG": [
+      {
+        "nome": "Tiradentes",
+        "data": "04-21",
+        "tipo": "Estadual",
+        "uf": "MG",
+        "recorrente": true
+      }
+    ]
+  },
+  "vencimentos": {
+    "SN": {
+      "DAS": {
+        "dia": 20,
+        "descricao": "Vencimento do DAS - Simples Nacional"
+      },
+      "PIS_COFINS": {
+        "dia": 25,
+        "descricao": "PIS/COFINS para empresas com receita acima do sublimite"
+      },
+      "ICMS": {
+        "variavel": true,
+        "descricao": "Varia por UF, geralmente entre dia 9 e 15"
+      },
+      "DIFAL": {
+        "variavel": true,
+        "descricao": "Varia por UF, geralmente até dia 15"
+      }
+    },
+    "LP": {
+      "PIS_COFINS": {
+        "dia": 25,
+        "descricao": "PIS/COFINS - Lucro Presumido"
+      },
+      "ICMS": {
+        "variavel": true,
+        "descricao": "Varia por UF"
+      },
+      "IRPJ_TRIMESTRAL": {
+        "dia": 31,
+        "meses": [3, 6, 9, 12],
+        "descricao": "IRPJ Trimestral - último dia do mês seguinte ao trimestre"
+      },
+      "IRPJ_MENSAL": {
+        "dia": 31,
+        "descricao": "IRPJ Estimativa Mensal - último dia do mês seguinte"
+      },
+      "CSLL_TRIMESTRAL": {
+        "dia": 31,
+        "meses": [3, 6, 9, 12],
+        "descricao": "CSLL Trimestral - último dia do mês seguinte ao trimestre"
+      },
+      "CSLL_MENSAL": {
+        "dia": 31,
+        "descricao": "CSLL Estimativa Mensal - último dia do mês seguinte"
+      },
+      "EFD_CONTRIBUICOES": {
+        "dia": 10,
+        "descricao": "EFD Contribuições - 10º dia útil do 2º mês subsequente"
+      },
+      "EFD_ICMS_IPI": {
+        "variavel": true,
+        "descricao": "Varia por UF, geralmente até dia 20"
+      },
+      "REINF": {
+        "dia": 15,
+        "descricao": "REINF - 15º dia do mês seguinte"
+      }
+    },
+    "LR": {
+      "PIS_COFINS": {
+        "dia": 25,
+        "descricao": "PIS/COFINS - Lucro Real"
+      },
+      "ICMS": {
+        "variavel": true,
+        "descricao": "Varia por UF"
+      },
+      "IRPJ_ANUAL": {
+        "dia": 31,
+        "mes": 3,
+        "descricao": "IRPJ Anual - 31 de março do ano seguinte"
+      },
+      "CSLL_ANUAL": {
+        "dia": 31,
+        "mes": 3,
+        "descricao": "CSLL Anual - 31 de março do ano seguinte"
+      },
+      "EFD_CONTRIBUICOES": {
+        "dia": 10,
+        "descricao": "EFD Contribuições - 10º dia útil do 2º mês subsequente"
+      },
+      "EFD_ICMS_IPI": {
+        "variavel": true,
+        "descricao": "Varia por UF, geralmente até dia 20"
+      },
+      "REINF": {
+        "dia": 15,
+        "descricao": "REINF - 15º dia do mês seguinte"
+      },
+      "ECF": {
+        "dia": 31,
+        "mes": 7,
+        "descricao": "ECF - Escrituração Contábil Fiscal - último dia útil de julho"
+      }
+    }
+  }
+}

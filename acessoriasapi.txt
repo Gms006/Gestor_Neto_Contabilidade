@@ -1,0 +1,701 @@
+Documentação da API de integração com o Sistema Acessórias API - acessorias.com
+Authentication
+Companies (consulta)
+Companies (inclusão/edição)
+Contacts (inclusão/edição)
+Deliveries
+Invoices (consulta)
+Processes (consulta)
+e-Contínuo
+Errors
+Authentication
+                
+
+API Endpoint
+https://api.acessorias.com
+
+# Curl
+curl --location --request GET 'https://api.acessorias.com'
+--header 'Authorization: Bearer secret_key'
+                
+
+            
+Utilizamos o padrão Bearer Authentication passado no Header das requisições.
+
+Para utilizar a API, é necessário gerar o seu Token através do botão da "engrenagem", no canto superior direito do Sistema Acessórias e clicar na opção "API Token".
+
+Rate-Limit
+Com o intuito de preservar os recursos e disponibilidade dos nossos sistemas, a API conta com a limitação de requisições.
+
+O limite é de 100 requisições por minuto, usando como estratégia de limitação o algoritmo 'Sliding Window', que libera novos slots de requisições conforme antigos slots são liberados.
+
+Companies (Consulta)
+
+# Curl
+curl --location --request GET 'https://api.acessorias.com/companies/{identificador}/?obligations&Pagina=1'
+--header 'Authorization: Bearer secret_key'
+
+# PHP (Curl)
+$curl = curl_init();
+
+curl_setopt_array($curl, array(
+  CURLOPT_URL => 'https://api.acessorias.com/companies/{identificador}/?obligations&Pagina=1',
+  CURLOPT_RETURNTRANSFER => true,
+  CURLOPT_ENCODING => '',
+  CURLOPT_MAXREDIRS => 10,
+  CURLOPT_TIMEOUT => 0,
+  CURLOPT_FOLLOWLOCATION => true,
+  CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+  CURLOPT_CUSTOMREQUEST => 'GET',
+  CURLOPT_HTTPHEADER => array(
+    'Authorization: Bearer secret_key'
+  ),
+));
+
+$response = curl_exec($curl);
+
+curl_close($curl);
+echo $response;
+                
+Para buscar os dados de Empresas, envie um GET para:
+https://api.acessorias.com/companies/{Identificador}
+
+
+
+
+Exemplo de resposta:
+
+{
+    "ID": "1",
+    "Identificador": "432.612.527-66",
+    "Razao": "Razão Social da Empresa LTDA",
+    "Fantasia": "Fantasia da Empresa",
+    "Obrigacoes": [
+        {
+            "Nome": "Analisar fluxo de caixa",
+            "Status": "Inativa nessa empresa",
+            "Entregues": "0",
+            "Atrasadas": "0",
+            "Proximos30D": "0",
+            "Futuras30+": "0"
+        },
+        {
+            "Nome": "INSS / GPS",
+            "Status": "Ativa",
+            "Entregues": "0",
+            "Atrasadas": "4",
+            "Proximos30D": "1",
+            "Futuras30+": "3"
+        }
+    ]
+}
+                
+Detalhes da requisição
+Campo	Tipo	Descrição
+secret_key	String	API Token
+Identificador	String	CNPJ/CPF de identificação da empresa ou 'ListAll' para listar todas as empresas paginadas
+obligations	Query Param	(opcional) Envie isso no GET caso queira as obrigações da empresa
+Pagina	Query Param	Número da página para busca de registros. Caso não seja informado retornará os registros da página 1. Dica: Só são listados 20 registros por página, para listar todos os dados, liste as páginas seguintes até vir uma lista vazia.
+Companies (Inclusão/Edição)
+
+# Curl
+curl --location --request POST 'https://api.acessorias.com/companies' 
+--header 'Authorization: Bearer secret_key'
+
+# PHP (Curl)
+$curl = curl_init();
+
+curl_setopt_array($curl, array(
+  CURLOPT_URL => 'https://api.acessorias.com/companies',
+  CURLOPT_RETURNTRANSFER => true,
+  CURLOPT_ENCODING => '',
+  CURLOPT_MAXREDIRS => 10,
+  CURLOPT_TIMEOUT => 0,
+  CURLOPT_FOLLOWLOCATION => true,
+  CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+  CURLOPT_CUSTOMREQUEST => 'POST',
+  CURLOPT_HTTPHEADER => array(
+    'Authorization: Bearer secret_key'
+  ),
+));
+
+$response = curl_exec($curl);
+
+curl_close($curl);
+echo $response;
+                
+Para adicionar/alterar os dados de Empresas, envie um POST para:
+https://api.acessorias.com/companies
+
+
+
+
+Exemplo de resposta de inclusão:
+{
+    "id": "1",
+    "msg": "Empresa 1 criada com sucesso!"
+}
+
+Exemplo de resposta de atualização:
+{
+    "id": "1",
+    "msg": "Empresa 1 atualizada com sucesso!"
+}
+                
+Detalhes da requisição
+Campo	Tipo	Descrição
+secret_key	String	API Token
+cnpj	String	Identificador da empresa, que pode ser CNPJ, CPF ou CAEPF. Caso já exista algum registro com o identificador enviado, o mesmo será atualizado.
+nome	String	Razão social da empresa
+fantasia	String	Nome fantasia da empresa
+id	Integer	(opcional) ID da empresa
+getid	Char	(opcional) [S/N] Valor padrão deste campo é: 'N'. Caso o ID enviado já esteja sendo utilizado por outra empresa, o registro será ignorado, a menos que este campo seja enviado com valor: 'S', neste caso o sistema irá buscar o próximo ID disponível.
+dtcadastro	Date	(opcional) [Y-m-d] Data de cadastro da empresa.
+dtclidesde	Date	(opcional) [Y-m-d] Data que o cliente entrou no escritório.
+dtcliate	Date	(opcional) [Y-m-d] Data que o cliente saiu do escritório.
+regime	Integer	(opcional) [Só será considerado em novos registros] ID do regime tributário da empresa, sendo:
+0	Indefinido
+1	Simples nacional com inscrição estadual
+2	Simples nacional sem inscrição estadual
+3	Lucro presumido com inscrição estadual - industria/comércio
+4	Lucro presumido sem inscrição estadual - serviço
+5	Lucro Real
+6	MEI - Micro Empreendedor Individual
+7	Domésticas/Caseiro - e-Social
+8	Produtor Rural
+9	Pessoa Física
+10	Imune/Isenta
+dtabertura	Date	(opcional) [Y-m-d] Data de abertura da empresa.
+inscmunicipal	String	(opcional) Inscrição municipal da empresa.
+dtinscmunicipal	Date	(opcional) [Y-m-d] Data da inscrição municipal da empresa.
+nire	String	(opcional) Nire da empresa.
+apelido	String	(opcional) Apelido da empresa para o e-Contínuo.
+endlogradouro	String	(opcional) Endereço.
+endnumero	String	(opcional) Número do endereço.
+endcomplemento	String	(opcional) Complemento do endereço.
+cep	String	(opcional) CEP.
+bairro	String	(opcional) Bairro.
+cidade	String	(opcional) Cidade.
+uf	String	(opcional) Estado.
+codibge	String	(opcional) Código do IBGE.
+website	String	(opcional) Website da empresa.
+fone	String	(opcional) Telefone da empresa.
+honorario	Float	(opcional) Valor de honorário da empresa. Observação: Milhares sem separação e decimais separados com ponto. Exemplo: 1580.98
+ativa	String	(opcional) [S/N] Padrão deste campo: 'S'. Empresa está ativa?.
+Contacts (Inclusão/Edição)
+
+# Curl
+curl --location --request POST 'https://api.acessorias.com/contacts/{Identificador}'
+--header 'Authorization: Bearer secret_key'
+
+# PHP (Curl)
+$curl = curl_init();
+
+curl_setopt_array($curl, array(
+  CURLOPT_URL => 'https://api.acessorias.com/contacts/',
+  CURLOPT_RETURNTRANSFER => true,
+  CURLOPT_ENCODING => '',
+  CURLOPT_MAXREDIRS => 10,
+  CURLOPT_TIMEOUT => 0,
+  CURLOPT_FOLLOWLOCATION => true,
+  CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+  CURLOPT_CUSTOMREQUEST => 'POST',
+  CURLOPT_HTTPHEADER => array(
+    'Authorization: Bearer secret_key'
+  ),
+));
+
+$response = curl_exec($curl);
+
+curl_close($curl);
+echo $response;
+                
+Para adicionar/alterar contatos em empresas, envie um POST para:
+https://api.acessorias.com/contacts/{Identificador}
+
+
+
+
+Exemplo de resposta de inclusão:
+{
+    "msg": "Contato criado com sucesso!"
+}
+
+Exemplo de resposta de atualização:
+{
+    "msg": "Contato atualizado com sucesso!"
+}
+                
+Detalhes da requisição
+Campo	Tipo	Descrição
+secret_key	String	API Token
+Identificador	String	CNPJ/CPF de identificação da empresa
+nome	String	Nome do contato
+email	String	E-mail válido do contato
+cargo	String	(opcional) Cargo do contato
+fone	String	(opcional) Telefone/Celular do contato
+dptos	Char	(opcional) [S/N] (Só será considerado em novos registros) Valor padrão deste campo é: 'S'. Caso o valor enviado seja 'S', será marcado todos os departamentos como 'permitidos' no cadastro do contato.
+Deliveries
+
+# Curl
+curl --location --request GET 'https://api.acessorias.com/deliveries/{identificador}/?DtInitial=2021-08-01&DtFinal=2021-08-31&DtLastDH=2024-08-30 07:00:00'
+--header 'Authorization: Bearer secret_key'
+
+# PHP (Curl)
+$curl = curl_init();
+
+curl_setopt_array($curl, array(
+  CURLOPT_URL => 'https://api.acessorias.com/deliveries/{identificador}/?DtInitial=2021-08-01&DtFinal=2021-08-31&DtLastDH=2024-08-30 07:00:00',
+  CURLOPT_RETURNTRANSFER => true,
+  CURLOPT_ENCODING => '',
+  CURLOPT_MAXREDIRS => 10,
+  CURLOPT_TIMEOUT => 0,
+  CURLOPT_FOLLOWLOCATION => true,
+  CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+  CURLOPT_CUSTOMREQUEST => 'GET',
+  CURLOPT_HTTPHEADER => array(
+    'Authorization: Bearer secret_key'
+  ),
+));
+
+$response = curl_exec($curl);
+
+curl_close($curl);
+echo $response;
+                
+Para buscar os dados de Entregas da empresa, você precisa enviar um GET para:
+https://api.acessorias.com/deliveries/{Identificador}/?DtInitial=YYYY-MM-DD&DtFinal=YYYY-MM-DD&DtLastDH=YYYY-MM-DD HH:MM:SS
+
+
+
+
+Exemplo de resposta:
+
+[
+    {
+        "ID": "1",
+        "Identificador": "432.612.527-66",
+        "Razao": "Razão Social da Empresa LTDA",
+        "Fantasia": "Fantasia da Empresa",
+        "Entregas": [
+            {
+                "Nome": "Guia da Previdência Social",
+                "EntDtPrazo": "2021-08-19",
+                "EntDtAtraso": "2021-08-20",
+                "EntDtEntrega": "2021-08-19",
+                "EntMulta": "S",
+                "Status": "Entregue",
+                "EntGuiaLida": "Guia já acessada/lida",
+                "EntLastDH": "2021-08-19 16:02:26",
+                "Config": {
+                    "EntID": "16350",
+                    "Tipo": "O",
+                    "ID": "230",
+                    "DptoID": "1",
+                    "DptoNome": "Financeiro"
+                }
+            },
+            {
+                "Nome": "Consulta do e-Social!",
+                "EntDtPrazo": "2021-08-19",
+                "EntDtAtraso": "2021-08-19",
+                "EntDtEntrega": "0000-00-00",
+                "EntMulta": "N",
+                "Status": "Pendente",
+                "EntGuiaLida": "",
+                "EntLastDH": "2021-08-19 16:02:26",
+                "Config": {
+                    "EntID": "16360",
+                    "Tipo": "O",
+                    "ID": "235",
+                    "DptoID": "2",
+                    "DptoNome": "Fiscal"
+                }
+            }
+        ]
+    },
+    {
+        "ID": "5",
+        "Identificador": "00.123.324/0009-99",
+        "Razao": "Razão S.A.",
+        "Fantasia": "Fantasia Razão",
+        "Entregas": [
+            {
+                "Nome": "GPS",
+                "EntCompetencia": "2024-02-06",
+                "EntDtPrazo": "2024-02-06",
+                "EntDtAtraso": "2024-02-06",
+                "EntDtEntrega": "0000-00-00",
+                "Status": "Atrasada!",
+                "EntLastDH": "2024-11-15 13:10:03",
+                "Config": {
+                    "EntID": "16370",
+                    "Tipo": "O",
+                    "ID": "240",
+                    "DptoID": "3",
+                    "DptoNome": "Contábil"
+                }
+            }
+        ]
+    }
+]
+                
+Detalhes da requisição
+Campo	Tipo	Descrição
+secret_key	String	API Token
+Identificador	String	CNPJ/CPF de identificação da empresa ou 'ListAll' para listar entregas de todas as empresas
+DtInitial	Query Param	(obrigatório) Data de prazo inicial no padrão USA (YYYY-MM-DD).
+DtFinal	Query Param	(obrigatório) Data de prazo final no padrão USA (YYYY-MM-DD).
+DtLastDH	Query Param	Opção para listar somente entregas alteradas após uma data/hora específica. Formato: (YYYY-MM-DD HH:MM:SS). Caso o horário não seja informado, será considerado 00:00:00. Exemplo: '2025-11-05 09:57:01'.
+Obs: Caso esteja utilizando o parâmetro 'ListAll' no Identificador, este campo é obrigatório, e aceitará apenas o dia atual e/ou o dia anterior.
+Pagina	Query Param	Número da página para busca de registros. Caso não seja informado retornará os registros da página 1. Dica: Só são listados 50 registros por página, para listar todos os dados, liste as páginas seguintes até vir uma lista vazia.
+config	Query Param	(opcional) Envie esse parâmetro para trazer a ID da entrega, Tipo do prazo (O = Obrigação ou T = Tarefa), ID da obrigação ou tarefa, ID do Dpto e Nome do Dpto.
+Caso enviar a ID da entrega nesse parâmetro, apenas os dados da entrega específica será enviada no retorno.
+Invoices (Consulta)
+
+# Curl
+curl --location --request GET 'https://api.acessorias.com/invoices/{identificador}/?Pagina=1&VOIni=2025-11-01&VOFim=2025-11-31&bStatus=Q&bltFat=S'
+--header 'Authorization: Bearer secret_key'
+
+# PHP (Curl)
+$curl = curl_init();
+
+curl_setopt_array($curl, array(
+  CURLOPT_URL => 'https://api.acessorias.com/invoices/{identificador}/?Pagina=1&VOIni=2025-11-01&VOFim=2025-11-31&bStatus=Q&bltFat=S',
+  CURLOPT_RETURNTRANSFER => true,
+  CURLOPT_ENCODING => '',
+  CURLOPT_MAXREDIRS => 10,
+  CURLOPT_TIMEOUT => 0,
+  CURLOPT_FOLLOWLOCATION => true,
+  CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+  CURLOPT_CUSTOMREQUEST => 'GET',
+  CURLOPT_HTTPHEADER => array(
+    'Authorization: Bearer secret_key'
+  ),
+));
+
+$response = curl_exec($curl);
+
+curl_close($curl);
+echo $response;
+                
+Para buscar os dados de boletos, envie um GET para:
+https://api.acessorias.com/invoices/{Identificador}
+Obs: é obrigatório enviar datas iniciais/finais ou de vencimento ou de vencimento original ou de pagamento ou de criação.
+
+
+
+
+Exemplo de resposta:
+
+[
+    {
+        "IDBoleto": "56212",
+        "Empresa": "Empresa XPTO",
+        "EmpID" 1,
+        "CNPJ": "11.111.111/0001-01",
+        "Competencia": "04/2023",
+        "VctoOriginal": "01/05/2023",
+        "Vencimento": "01/05/2023",
+        "Pagamento": "02/05/2023",
+        "DtCredito": "02/05/2023",
+        "Valor": "575,00",
+        "VrPago": "575,00",
+        "VrTaxa": "2,00",
+        "Status": "Q",
+        "Nota": "202300000018210",
+        "PDFNota": "https://endereco.com",
+        "Fatura": [
+            {
+                "Descricao": "Contabilidade",
+                "Valor": "575.00",
+                "CodPlContas": "01.01",
+                "DescPlContas": "Serviços prestados"
+            }
+        ]
+    }
+]
+                
+Detalhes da requisição
+Campo	Tipo	Descrição
+secret_key	String	API Token
+Identificador	String	CNPJ/CPF de identificação da empresa ou 'Geral' para listar boletos de todas as empresas
+VIni	Query Param	Data inicial de vencimento dos boletos a serem listados. Utilizar no padrão USA (YYYY-MM-DD)
+VFim	Query Param	Data final do vencimento dos boletos a serem listados. Utilizar no padrão USA (YYYY-MM-DD)
+VOIni	Query Param	Data inicial de vencimento original dos boletos a serem listados. Utilizar no padrão USA (YYYY-MM-DD)
+VOFim	Query Param	Data final do vencimento original dos boletos a serem listados. Utilizar no padrão USA (YYYY-MM-DD)
+PgtoIni	Query Param	Data inicial do pagamento dos boletos a serem listados. Utilizar no padrão USA (YYYY-MM-DD)
+PgtoFim	Query Param	Data final do pagamento dos boletos a serem listados. Utilizar no padrão USA (YYYY-MM-DD)
+DtCriaIni	Query Param	Data inicial da criação dos boletos a serem listados. Utilizar no padrão USA (YYYY-MM-DD)
+DtCriaFim	Query Param	Data final da criação dos boletos a serem listados. Utilizar no padrão USA (YYYY-MM-DD)
+DtLast	Query Param	Data base da última alteração dos boletos a serem listados. Utilizar no padrão USA (YYYY-MM-DD). Obs: Somente boletos atualizados dessa data para frente serão listados.
+bltFat	Query Param	(opcional) Se informar valor 'S', retorna com os detalhes da fatura do boleto em um array chamado 'Fatura'. Se não informar nada, vai com padrão 'N'.
+bStatus	Query Param	(opcional) Informe a letra correspondente para filtrar boletos pelos seguintes status:
+  P = Pendentes
+  Q = Quitados
+  C = Cancelados
+bID	Query Param	(opcional) Informe a ID do boleto desejado para buscar somente o registro específico
+Pagina	Query Param	Número da página para busca de registros. Caso não seja informado retornará os registros da página 1. Dica: Só são listados 20 registros por página, para listar todos os dados, liste as páginas seguintes até vir uma lista vazia.
+Processes (Consulta)
+
+# Curl
+curl --location --request GET 'https://api.acessorias.com/processes/{ProcID}*/?Pagina=1'
+--header 'Authorization: Bearer secret_key'
+
+# PHP (Curl)
+$curl = curl_init();
+
+curl_setopt_array($curl, array(
+  CURLOPT_URL => 'https://api.acessorias.com/processes/{ProcID}*/?Pagina=1',
+  CURLOPT_RETURNTRANSFER => true,
+  CURLOPT_ENCODING => '',
+  CURLOPT_MAXREDIRS => 10,
+  CURLOPT_TIMEOUT => 0,
+  CURLOPT_FOLLOWLOCATION => true,
+  CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+  CURLOPT_CUSTOMREQUEST => 'GET',
+  CURLOPT_HTTPHEADER => array(
+    'Authorization: Bearer secret_key'
+  ),
+));
+
+$response = curl_exec($curl);
+
+curl_close($curl);
+echo $response;
+                
+Para buscar os dados de processos, envie um GET para:
+https://api.acessorias.com/processes/{ProcID}*
+
+
+
+
+Exemplo de resposta (listagem):
+
+[
+    {
+        "ProcID": "12345",
+        "ProcNome": "Processo de exemplo",
+        "ProcTitulo": "Processo de exemplo",
+        "ProcCriador": "Usuário de exemplo",
+        "ProcGestor": "Usuário de exemplo",
+        "ProcObservacoes": "",
+        "ProcInicio": "11/07/2024",
+        "ProcDiasCorridos": "1",
+        "ProcConclusao": "20/07/2024", # (Previsao quando não concluído)
+        "ProcDepartamento": "Departamento exemplo",
+        "ProcStatus": "Em andamento",
+        "ProcPorcentagem": "30%",
+        "DtLastDH": "06/12/2024 15:10:12",
+        "EmpNome": "Empresa XPTO",
+        "EmpID": "1",
+        "EmpCNPJ": "11.111.111/0001-01",
+    }
+]
+
+Exemplo de resposta (detalhes do processo):
+
+[
+    {
+        "ProcID": "12345",
+        "ProcNome": "Processo de exemplo",
+        "ProcTitulo": "Processo de exemplo",
+        "ProcCriador": "Usuário de exemplo",
+        "ProcGestor": "Usuário de exemplo",
+        "ProcObservacoes": "",
+        "ProcInicio": "11/07/2024",
+        "ProcDiasCorridos": "1",
+        "ProcConclusao": "20/07/2024", 
+        "ProcDepartamento": "Departamento exemplo",
+        "ProcStatus": "Em andamento",
+        "ProcPorcentagem": "30%",
+        "DtLastDH": "06/12/2024 15:10:12",
+        "EmpNome": "Empresa XPTO",
+        "EmpID" 1,
+        "EmpCNPJ": "11.111.111/0001-01",
+        "ProcPassos": [
+            {
+                "Tipo": "Passo simples",
+                "Status": "OK",
+                "Nome": "Tarefa pontual",
+                "Automacao": {
+                    "Entrega": {
+                        "Tipo": "Tarefa",
+                        "Nome": "Tarefa",
+                        "Criacao": "no dia do início/autorização do processo",
+                        "Previsao": "30 min",
+                        "Responsavel": "Pedro",
+                        "Prazo": "18/07/2024"
+                    },
+                    "Bloqueante": "Sim"
+                }
+            },
+            {
+                "Tipo": "Passo simples",
+                "Status": "Pendente",
+                "Nome": "passo simplés",
+                "Automacao": {
+                    "Entrega": {
+                            "Tipo": "Obrigação",
+                            "Nome": "FGTS DIGITAL",
+                            "Criacao": "após o OK do passo 'Tarefa pontual'",
+                            "Previsao": "10 min",
+                            "Responsavel": "Gabriel Simões",
+                            "Prazo": "30/07/2024"
+                        },
+                    "Bloqueante": "Não"
+                }
+            },
+            {
+                "Tipo": "Sub processo",
+                "Nome": "Definir permissões",
+                "ProcPassos": [
+                    {
+                        "Tipo": "Passo simples",
+                        "Status": "OK",
+                        "Nome": "Definir as permissões do usuário",
+                        "Automacao": {
+                            "Entrega": [],
+                            "Bloqueante": "Não"
+                        }
+                    }
+                ]
+            },
+            {
+                "Tipo": "Follow up",
+                "Status": "Pendente",
+                "Nome": "Avisar ao Dpto de TI",
+                "Automacao": {
+                    "Quando": "Disparo manual",
+                    "Para": "e-mail específico 'Dpto TI '"
+                }
+            },
+            {
+                "Tipo": "Desdobramento",
+                "Status": "Pendente",
+                "Nome": "Qual o Dpto?",
+                "Automacao": [
+                    {
+                        "Nome": "Fiscal",
+                        "Acao": {
+                            "Tipo": "Sub processo",
+                            "Nome": "Novo funcionário - Fiscal"
+                        }
+                    },
+                    {
+                        "Nome": "Contábil",
+                        "Acao": {
+                            "Tipo": "Sub processo",
+                            "Nome": "Novo funcionário - Contábil"
+                        }
+                    },
+                    {
+                        "Nome": "TI",
+                        "Acao": {
+                            "Tipo": "Passo simples",
+                            "Nome": "Conclui o passo"
+                        }
+                    }
+                ]
+            },
+            {
+                "Tipo": "Desdobramento",
+                "Status": "OK",
+                "Nome": "Qual o Dpto",
+                "Automacao": [
+                    {
+                        "Nome": "TI",
+                        "Acao": {
+                            "Tipo": "Passo simples",
+                            "Nome": "Conclui o passo"
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+]
+                
+Detalhes da requisição
+Campo	Tipo	Descrição
+secret_key	String	API Token
+ProcID/ListAll	String	(obrigatório) ID do processo em andamento para exibição do mesmo ou 'ListAll' para listar todos os processos de acordo com os filtros aplicados
+ProcStatus	Query Param	(opcional) Informe a letra correspondente para filtrar processos pelos seguintes status:
+  A = Em (A)ndamento
+  C = (C)oncluídos
+  S = (S)uspensos
+  D = (D)esistências
+  P = Agendados / (P)ending
+  W = Aguardando aprovação / (W)aiting
+  X = E(X)cluídos
+Obs: Processos excluídos não são listados por padrão e são apenas exibidos quando buscados separadamente.
+ProcNome	Query Param	(opcional) Informe o nome ou título do processo para buscar os registros específicos
+ProcInicioIni	Query Param	(opcional) Data inicial do processo. Utilizar no padrão USA (YYYY-MM-DD)
+ProcInicioFim	Query Param	(opcional) Data final do processo. Utilizar no padrão USA (YYYY-MM-DD)
+ProcConclusaoIni	Query Param	(opcional) Data inicial de conclusão do processo. Utilizar no padrão USA (YYYY-MM-DD)
+ProcConclusaoFim	Query Param	(opcional) Data final de conclusão do processo. Utilizar no padrão USA (YYYY-MM-DD)
+Pagina	Query Param	Número da página para busca de registros. Caso não seja informado retornará os registros da página 1. Dica: Só são listados 20 registros por página, para listar todos os dados, liste as páginas seguintes até vir uma lista vazia.
+DtLastDH	Query Param	Opção para listar somente os processos que tiveram alterações após uma data/hora específica. Data no padrão USA (YYYY-MM-DD HH:MM:SS). Exemplo: '2025-11-05 09:57:01'
+e-Contínuo
+
+# Curl
+curl --location --request POST 'https://api.acessorias.com/econtinuo'
+--header 'Authorization: Bearer secret_key'
+
+# PHP (Curl)
+$curl = curl_init();
+
+curl_setopt_array($curl, array(
+  CURLOPT_URL => 'https://api.acessorias.com/econtinuo',
+  CURLOPT_RETURNTRANSFER => true,
+  CURLOPT_ENCODING => '',
+  CURLOPT_MAXREDIRS => 10,
+  CURLOPT_TIMEOUT => 0,
+  CURLOPT_FOLLOWLOCATION => true,
+  CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+  CURLOPT_CUSTOMREQUEST => 'POST',
+  CURLOPT_POSTFIELDS => array('arquivo'=> new CURLFILE(FilePath)),
+  CURLOPT_HTTPHEADER => array(
+    'Authorization: Bearer secret_key'
+  ),
+));
+
+$response = curl_exec($curl);
+
+curl_close($curl);
+echo $response;
+                
+Para enviar arquivos para o nosso Robô e-Contínuo processar, envie um POST para:
+https://api.acessorias.com/econtinuo
+
+
+
+
+Exemplo de resposta de sucesso:
+{
+    "msg": "Entrega processada com sucesso! [GPS - Guia da Previdência Social]",
+    "pathFolder": "13/Geral/GUIAS/GPS/2022/01/Pessoal/2022-01-GPSMensalpdf.pdf"
+}
+
+Exemplo de resposta sem sucesso:
+{
+    "Erro": "Entrega [GPS para 30.637.209/0001-21] inexistente [Comp. 01/2022]."
+}
+                
+Detalhes da requisição
+Campo	Tipo	Descrição
+secret_key	String	API Token
+arquivo	File	(obrigatório) Arquivo PDF a ser processado
+
+Observação referente ao retorno
+Campo	Tipo	Descrição
+pathFolder	String	Caminho sugerido para cópia de backup na estrutura local do cliente
+Errors
+Nossa API sempre ira usar os códigos no padrão HTTP:
+
+Code	Meaning
+200	Tudo OK com a requisição, o Json será entregue no retorno.
+401	Unauthorized. Secret Key Inválido ou Incorreta.
+404	Not Found. Requisição incorreta ou não encontrada.
+429	Too Many Requests.
+204	No Content. Não existe conteúdo para a requisição.

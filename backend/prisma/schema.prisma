@@ -1,0 +1,60 @@
+// backend/prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL") // ex.: file:./gestor.db
+}
+
+model Company {
+  id           String   @id @default(cuid())
+  externalId   Int      @unique
+  name         String
+  updatedAt    DateTime @updatedAt
+  Processes    Process[]
+}
+
+model Process {
+  id           String   @id @default(cuid())
+  externalId   Int      @unique
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id])
+  title        String
+  department   String?
+  statusRaw    String     // como vem da API
+  progress     Float?     // 0..100
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  lastDH       DateTime?  // campo incremental vindo da API (se existir)
+  updatedAt    DateTime   @updatedAt
+  Deliveries   Delivery[]
+
+  @@index([statusRaw])
+  @@index([finishedAt])
+  @@index([startedAt])
+}
+
+model Delivery {
+  id           String   @id @default(cuid())
+  externalId   Int      @unique
+  processId    String?
+  process      Process? @relation(fields: [processId], references: [id])
+  type         String?
+  statusRaw    String?
+  occurredAt   DateTime?
+  updatedAt    DateTime  @updatedAt
+}
+
+model SyncCursor {
+  id        String   @id @default("acessorias")
+  lastDH    DateTime?
+  updatedAt DateTime @updatedAt
+}
+
+model SyncState {
+  key     String  @id
+  value   String
+  updatedAt DateTime @updatedAt
+}

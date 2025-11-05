@@ -1,0 +1,323 @@
+/* Estilos Globais */
+:root {
+    --primary-color: #0d6efd;
+    --secondary-color: #6c757d;
+    --success-color: #198754;
+    --danger-color: #dc3545;
+    --warning-color: #ffc107;
+    --info-color: #0dcaf0;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #f8f9fa;
+}
+
+/* Navbar */
+.navbar-brand {
+    font-weight: bold;
+    font-size: 1.5rem;
+}
+
+/* Cards */
+.card {
+    border-radius: 10px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.card-header {
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+}
+
+/* Botões de Ação Rápida */
+.btn-outline-primary,
+.btn-outline-success,
+.btn-outline-warning,
+.btn-outline-info {
+    height: 100px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    font-weight: 500;
+    transition: all 0.3s;
+}
+
+.btn-outline-primary:hover,
+.btn-outline-success:hover,
+.btn-outline-warning:hover,
+.btn-outline-info:hover {
+    transform: scale(1.05);
+}
+
+/* Tabelas */
+.table {
+    background-color: white;
+}
+
+.table thead {
+    background-color: #f8f9fa;
+}
+
+.table-hover tbody tr:hover {
+    background-color: #f1f3f5;
+    cursor: pointer;
+}
+
+/* Badges */
+.badge {
+    padding: 0.5em 0.75em;
+    font-size: 0.875rem;
+}
+
+/* Status */
+.status-nao-iniciado {
+    background-color: #6c757d;
+}
+
+.status-em-andamento {
+    background-color: #ffc107;
+    color: #000;
+}
+
+.status-pausado {
+    background-color: #fd7e14;
+}
+
+.status-concluido {
+    background-color: #198754;
+}
+
+.status-pulado {
+    background-color: #dc3545;
+}
+
+/* Timer */
+.timer-display {
+    font-size: 2rem;
+    font-weight: bold;
+    font-family: 'Courier New', monospace;
+    color: #0d6efd;
+}
+
+.timer-running {
+    color: #198754;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.6;
+    }
+}
+
+/* Etapas */
+.etapa-card {
+    border-left: 4px solid #0d6efd;
+    margin-bottom: 1rem;
+}
+
+.etapa-card.concluida {
+    border-left-color: #198754;
+    opacity: 0.7;
+}
+
+.etapa-card.em-andamento {
+    border-left-color: #ffc107;
+    background-color: #fff9e6;
+}
+
+.etapa-card.pulada {
+    border-left-color: #dc3545;
+    opacity: 0.5;
+}
+
+/* Problemas */
+.problema-badge {
+    font-size: 0.75rem;
+    padding: 0.25em 0.5em;
+}
+
+.impacto-baixo {
+    background-color: #d1ecf1;
+    color: #0c5460;
+}
+
+.impacto-medio {
+    background-color: #fff3cd;
+    color: #856404;
+}
+
+.impacto-alto {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+.impacto-critico {
+    background-color: #dc3545;
+    color: white;
+}
+
+/* Modal */
+.modal-header {
+    background-color: #0d6efd;
+    color: white;
+}
+
+.modal-footer {
+    background-color: #f8f9fa;
+}
+
+/* Formulários */
+.form-label {
+    font-weight: 500;
+    color: #495057;
+}
+
+.form-control:focus,
+.form-select:focus {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+}
+
+/* Alertas */
+.alert {
+    border-radius: 10px;
+    border-left: 4px solid;
+}
+
+.alert-success {
+    border-left-color: #198754;
+}
+
+.alert-danger {
+    border-left-color: #dc3545;
+}
+
+.alert-warning {
+    border-left-color: #ffc107;
+}
+
+.alert-info {
+    border-left-color: #0dcaf0;
+}
+
+/* Loading */
+.loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+
+.loading-spinner {
+    width: 3rem;
+    height: 3rem;
+}
+
+/* Responsividade */
+@media (max-width: 768px) {
+    .card-body {
+        padding: 1rem;
+    }
+
+    .btn-outline-primary,
+    .btn-outline-success,
+    .btn-outline-warning,
+    .btn-outline-info {
+        height: 80px;
+        font-size: 0.875rem;
+    }
+
+    .table {
+        font-size: 0.875rem;
+    }
+}
+
+/* Animações */
+.fade-in {
+    animation: fadeIn 0.5s;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Scroll suave */
+html {
+    scroll-behavior: smooth;
+}
+
+/* Customização do scrollbar */
+::-webkit-scrollbar {
+    width: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+/* Botões personalizados */
+.btn-icon {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+}
+
+/* Dashboard Charts */
+.chart-container {
+    position: relative;
+    height: 300px;
+    margin-bottom: 2rem;
+}
+
+/* Print styles */
+@media print {
+    .navbar,
+    .btn,
+    .no-print {
+        display: none !important;
+    }
+
+    .card {
+        box-shadow: none;
+        border: 1px solid #dee2e6;
+    }
+}

@@ -1,105 +1,71 @@
+<!-- web/index.html -->
 <!doctype html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8" />
-  <title>Gestor Neto Contabilidade — Portal</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- Tailwind (CDN) -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Chart.js (CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <link rel="stylesheet" href="./styles.css" />
-</head>
-<body class="bg-slate-50 text-slate-800">
-  <a href="#conteudo" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:bg-white focus:px-3 focus:py-2 focus:rounded">Pular para o conteúdo</a>
-  <header class="bg-white border-b sticky top-0 z-30 shadow-sm">
-    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-      <div>
-        <h1 class="text-xl font-semibold tracking-tight">Gestor — Portal Operacional</h1>
-        <p id="lastUpdate" class="text-sm text-slate-500" aria-live="polite"></p>
-      </div>
-      <div class="flex gap-2">
-        <button id="btnRefresh" class="btn" type="button" aria-label="Atualizar dados">🔄 Atualizar dados</button>
-        <a class="btn-outline" href="../README.md" target="_blank" rel="noopener">Ajuda</a>
-      </div>
+<html lang="pt-br">
+  <head>
+    <meta charset="utf-8" />
+    <title>Gestor Neto Contabilidade</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell; margin: 24px; }
+      button { padding: 8px 12px; border-radius: 8px; border: 1px solid #ccc; cursor: pointer; }
+      .row { display: flex; gap: 12px; align-items: center; }
+      .card { padding: 12px; border: 1px solid #eee; border-radius: 10px; margin: 8px 0; }
+      code { background: #f6f8fa; padding: 2px 6px; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <h1>Gestor Neto Contabilidade</h1>
+    <div class="row">
+      <button id="btnSync">🔄 Atualizar agora</button>
+      <span id="meta"></span>
     </div>
-    <nav class="max-w-7xl mx-auto px-4 pb-2" aria-label="Seções do portal">
-      <ul class="tabs" role="tablist">
-        <li><a href="#tab=dashboard" class="tab active" role="tab" aria-controls="view-dashboard" aria-selected="true">Dashboard</a></li>
-        <li><a href="#tab=obrigacoes" class="tab" role="tab" aria-controls="view-obrigacoes">Obrigações</a></li>
-        <li><a href="#tab=processos" class="tab" role="tab" aria-controls="view-processos">Processos</a></li>
-        <li><a href="#tab=alertas" class="tab" role="tab" aria-controls="view-alertas">Alertas</a></li>
-        <li><a href="#tab=empresas" class="tab" role="tab" aria-controls="view-empresas">Empresas</a></li>
-      </ul>
-    </nav>
-  </header>
 
-  <main id="conteudo" class="max-w-7xl mx-auto px-4 py-6 space-y-8" tabindex="-1">
-    <!-- DASHBOARD -->
-    <section id="view-dashboard" class="view" role="tabpanel" aria-labelledby="tab-dashboard">
-      <div id="empty-dashboard" class="empty-state hidden" role="status" aria-live="polite"></div>
-      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-5" id="cards" aria-live="polite"></div>
-      <div class="grid md:grid-cols-2 gap-6">
-        <div class="panel">
-          <h3 class="panel-title">REINF — Obrigatória x Dispensa (por competência)</h3>
-          <canvas id="chReinf" aria-label="Gráfico de barras REINF" role="img"></canvas>
-        </div>
-        <div class="panel">
-          <h3 class="panel-title">EFD Contrib — Obrigatória x Dispensa (por competência)</h3>
-          <canvas id="chEfd" aria-label="Gráfico de barras EFD Contribuições" role="img"></canvas>
-        </div>
-        <div class="panel">
-          <h3 class="panel-title">DIFAL por tipo</h3>
-          <canvas id="chDifal" aria-label="Gráfico de rosca DIFAL" role="img"></canvas>
-        </div>
-        <div class="panel">
-          <h3 class="panel-title">Dia do mês de fechamento (média/mediana)</h3>
-          <canvas id="chFechamento" aria-label="Gráfico de linha de fechamento" role="img"></canvas>
-        </div>
-      </div>
-    </section>
+    <h3>Processos (últimos 10)</h3>
+    <div id="list"></div>
 
-    <!-- OBRIGAÇÕES -->
-    <section id="view-obrigacoes" class="view hidden" role="tabpanel" aria-labelledby="tab-obrigacoes">
-      <div class="sr-only" id="obrigacoes-help">Use os filtros para localizar obrigações por empresa, competência ou responsável.</div>
-      <div id="empty-obrig" class="empty-state hidden" role="status" aria-live="polite"></div>
-      <div id="filters-obrig" class="filters" aria-describedby="obrigacoes-help"></div>
-      <div id="table-obrig" class="table-wrap" role="region" aria-live="polite"></div>
-      <div class="pager" id="pager-obrig"></div>
-    </section>
+    <script>
+      const API = location.origin + "/api";
 
-    <!-- PROCESSOS -->
-    <section id="view-processos" class="view hidden" role="tabpanel" aria-labelledby="tab-processos">
-      <div id="filters-proc" class="filters"></div>
-      <div id="table-proc" class="table-wrap" role="region" aria-live="polite"></div>
-      <div class="pager" id="pager-proc"></div>
-    </section>
+      async function loadMeta() {
+        const r = await fetch(`${API}/meta`);
+        const j = await r.json();
+        const last = j?.meta?.lastSync ?? "—";
+        document.getElementById("meta").textContent = `Última sync: ${last}`;
+      }
 
-    <!-- ALERTAS -->
-    <section id="view-alertas" class="view hidden" role="tabpanel" aria-labelledby="tab-alertas">
-      <div class="flex flex-wrap gap-2 mb-3" role="group" aria-label="Filtros rápidos de alertas">
-        <button class="chip active" data-alert="all" type="button">Todos</button>
-        <button class="chip" data-alert="risco" type="button">Somente em risco</button>
-        <button class="chip" data-alert="bloq" type="button">Somente bloqueantes</button>
-      </div>
-      <div id="alerts-list" class="space-y-4" aria-live="polite"></div>
-    </section>
+      async function loadProcesses() {
+        const r = await fetch(`${API}/processes?take=10`);
+        const j = await r.json();
+        const host = document.getElementById("list");
+        host.innerHTML = "";
+        (j.rows ?? []).forEach((p) => {
+          const div = document.createElement("div");
+          div.className = "card";
+          div.innerHTML = `
+            <div><b>${p.title ?? p.idAcessorias ?? p.id}</b></div>
+            <div>Status: <code>${p.status ?? "—"}</code></div>
+            <div>Empresa: ${p.company?.nome ?? "—"}</div>
+            <div>Atualizado: ${p.updatedAt ?? "—"}</div>
+          `;
+          host.appendChild(div);
+        });
+      }
 
-    <!-- EMPRESAS -->
-    <section id="view-empresas" class="view hidden" role="tabpanel" aria-labelledby="tab-empresas">
-      <div id="empty-empresas" class="empty-state hidden" role="status" aria-live="polite"></div>
-      <div class="mb-3">
-        <label class="sr-only" for="q-emp">Buscar empresa ou CNPJ</label>
-        <input id="q-emp" class="input" placeholder="🔎 Buscar empresa ou CNPJ" aria-label="Buscar empresa ou CNPJ" />
-      </div>
-      <div id="cards-empresas" class="grid gap-4 md:grid-cols-2"></div>
-    </section>
-  </main>
+      document.getElementById("btnSync").addEventListener("click", async () => {
+        const btn = document.getElementById("btnSync");
+        btn.disabled = true; btn.textContent = "Atualizando…";
+        try {
+          await fetch(`${API}/sync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ full: false }) });
+          await loadMeta();
+          await loadProcesses();
+        } finally {
+          btn.disabled = false; btn.textContent = "🔄 Atualizar agora";
+        }
+      });
 
-  <footer class="max-w-7xl mx-auto px-4 py-10 text-xs text-slate-500">
-    <p>Leitura local de <code>../data/*.json</code>. Sem backend. © Neto Contabilidade</p>
-  </footer>
-
-  <script type="module" src="./app.js"></script>
-</body>
+      // boot
+      loadMeta();
+      loadProcesses();
+    </script>
+  </body>
 </html>

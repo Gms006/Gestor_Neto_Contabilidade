@@ -1,0 +1,18 @@
+{
+  "ProcID": "6169-01-01 00:00:00",
+  "ProcNome": "Contabilidade Anual 2025",
+  "ProcTitulo": "Contabilidade Anual 2025",
+  "ProcCriador": "João Guimarães",
+  "ProcGestor": "83480",
+  "ProcObservacoes": "Acompanhamento da Contabilidade anual em 2025.",
+  "ProcInicio": "2025-10-01 00:00:00",
+  "ProcDiasCorridos": "35",
+  "ProcConclusao": "2027-03-01 00:00:00",
+  "ProcDepartamento": "Contábil",
+  "ProcStatus": "Em andamento",
+  "ProcPorcentagem": "0.00",
+  "DtLastDH": "2025-10-01 13:38:28",
+  "EmpNome": "SOCIEDADE CRISTA ORTODOXA BENEFICIENTE DE ANAPOLIS",
+  "EmpID": "11",
+  "EmpCNPJ": "01.051.994/0001-38"
+}

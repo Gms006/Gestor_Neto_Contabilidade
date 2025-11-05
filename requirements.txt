@@ -8,3 +8,5 @@ alembic>=1.12,<2
 fastapi>=0.104,<1
 uvicorn[standard]>=0.24,<1
 APScheduler>=3.10,<4
+
+apscheduler>=3.10.4
