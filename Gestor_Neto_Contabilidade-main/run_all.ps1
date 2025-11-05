@@ -4,19 +4,20 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# Ir para a raiz do projeto (onde está este script)
+# Ir para a raiz do projeto (onde está este script) e escolher Python (preferir .venv)
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location -LiteralPath $Root
-
-# Escolher Python do sistema (sem venv)
-$PY = "python"
-if (-not (Get-Command $PY -ErrorAction SilentlyContinue)) {
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    $PY = "py -3.10"
-  } else {
-    throw "Python 3.10+ não encontrado no PATH."
-  }
+$VenvPy = Join-Path $Root ".venv\Scripts\python.exe"
+if (Test-Path $VenvPy) {
+  $PY = $VenvPy
+} elseif (Get-Command python -ErrorAction SilentlyContinue) {
+  $PY = "python"
+} elseif (Get-Command py -ErrorAction SilentlyContinue) {
+  $PY = "py -3.10"
+} else {
+  throw "Python 3.10+ não encontrado no PATH."
 }
+
+Set-Location -LiteralPath $Root
 
 # Helper simples para rodar módulos
 function Run-Module {
@@ -59,9 +60,9 @@ if (Test-Path "data\events.json") {
 
 # Subir site local (opcional)
 if ($Serve) {
-  Write-Host "`nServidor: http://localhost:8000/web/" -ForegroundColor Magenta
-  Start-Process powershell -ArgumentList "-NoExit","-Command","cd `"$Root`"; python -m http.server 8000"
-  Start-Process "http://localhost:8000/web/"
+  Write-Host "`nServidor: http://localhost:8088/web/" -ForegroundColor Magenta
+  Start-Process powershell -ArgumentList "-NoExit","-Command","cd `"$Root`"; uvicorn scripts.server:app --host 127.0.0.1 --port 8088"
+  Start-Process "http://localhost:8088/web/"
 }
 
 Write-Host "`nOK" -ForegroundColor Cyan

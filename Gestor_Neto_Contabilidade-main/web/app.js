@@ -31,6 +31,57 @@ async function loadJSON(path, { force = false } = {}) {
   }
 }
 
+async function apiOrJson(pathApi, fallbackJson, { force = false } = {}) {
+  const cacheKey = `api:${pathApi}`;
+  if (!force && state.cache[cacheKey]) return state.cache[cacheKey];
+  try {
+    const res = await fetch(pathApi, { cache: 'no-cache' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    state.cache[cacheKey] = data;
+    return data;
+  } catch (err) {
+    console.warn('API indisponível, usando fallback', pathApi, err);
+    const fallback = await loadJSON(fallbackJson, { force });
+    state.cache[cacheKey] = fallback;
+    return fallback;
+  }
+}
+
+function resolveItems(payload, key) {
+  if (Array.isArray(payload)) return payload;
+  if (key && Array.isArray(payload?.[key])) return payload[key];
+  if (Array.isArray(payload?.items)) return payload.items;
+  return [];
+}
+
+async function loadProcesses({ force = false } = {}) {
+  const raw = await apiOrJson('/api/processes?limite=10000', '../data/processes.json', { force });
+  const items = resolveItems(raw, 'items');
+  state.cache['data:processes'] = items;
+  return items;
+}
+
+async function loadEventsData({ force = false } = {}) {
+  const raw = await apiOrJson('/api/events', '../data/events.json', { force });
+  const events = resolveItems(raw, 'events');
+  state.cache['data:events'] = events;
+  return events;
+}
+
+async function loadKpis({ force = false } = {}) {
+  const raw = await apiOrJson('/api/kpis', '../data/kpis.json', { force });
+  state.cache['data:kpis'] = raw;
+  return raw;
+}
+
+async function loadCompaniesData({ force = false } = {}) {
+  const raw = await apiOrJson('/api/companies', '../data/companies_obligations.json', { force });
+  const list = resolveItems(raw);
+  state.cache['data:companies'] = list;
+  return list;
+}
+
 function saveFilters(tab, obj) {
   localStorage.setItem(`gst.filters.${tab}`, JSON.stringify(obj));
 }
@@ -367,14 +418,14 @@ function syncHash(tab, extras = {}) {
 
 /* ----------------------- DASHBOARD ----------------------- */
 async function renderDashboard() {
-  const proc = await loadJSON('../data/processes.json');
-  const events = await loadJSON('../data/events.json');
-  await loadJSON('../data/kpis.json');
+  const proc = await loadProcesses();
+  const events = await loadEventsData();
+  await loadKpis();
 
   const hasEvents = Array.isArray(events) && events.length > 0;
   let fallbackTotals = null;
   if (!hasEvents) {
-    const companiesData = await loadJSON('../data/companies_obligations.json');
+    const companiesData = await loadCompaniesData();
     fallbackTotals = summarizeCompanyTotals(companiesData);
   }
 
@@ -549,11 +600,11 @@ async function renderDashboard() {
 }
 /* ----------------------- OBRIGAÇÕES (EVENTOS) ----------------------- */
 async function renderObrigacoes() {
-  const events = await loadJSON('../data/events.json');
+  const events = await loadEventsData();
   const hasEvents = Array.isArray(events) && events.length > 0;
   let emptyContent = 'Sem dados de obrigações no momento. Execute a coleta ou ajuste os filtros.';
   if (!hasEvents) {
-    const companiesData = await loadJSON('../data/companies_obligations.json');
+    const companiesData = await loadCompaniesData();
     const totals = summarizeCompanyTotals(companiesData);
     if (totals) {
       const labels = [
@@ -832,7 +883,7 @@ async function renderObrigacoes() {
 }
 /* ----------------------- PROCESSOS ----------------------- */
 async function renderProcessos() {
-  const proc = await loadJSON('../data/processes.json');
+  const proc = await loadProcesses();
   const tab = 'processos';
   const uniq = (arr) => [...new Set(arr.filter(Boolean))].sort((a, b) => compareValues(a, b));
 
@@ -1187,8 +1238,8 @@ async function renderAlertas() {
 
 /* ----------------------- EMPRESAS ----------------------- */
 async function renderEmpresas() {
-  const events = await loadJSON('../data/events.json');
-  const proc = await loadJSON('../data/processes.json');
+  const events = await loadEventsData();
+  const proc = await loadProcesses();
   const box = $('#cards-empresas');
   const q = $('#q-emp');
   if (!box || !q) return;
@@ -1205,7 +1256,7 @@ async function renderEmpresas() {
 
   let companies = Object.values(byEmp).sort((a, b) => compareValues(a.empresa || '', b.empresa || ''));
   if (!companies.length) {
-    const companiesFallback = await loadJSON('../data/companies_obligations.json');
+    const companiesFallback = await loadCompaniesData();
     if (Array.isArray(companiesFallback) && companiesFallback.length) {
       companies = companiesFallback.map((item) => ({
         empresa: item?.empresa || item?.raw?.RazaoSocial || '(Sem nome)',
@@ -1350,7 +1401,14 @@ function bindTabs() {
     btn.disabled = true;
     (async () => {
       try {
-        if (state.localConfig?.update_url) {
+        let triggered = false;
+        try {
+          const resSync = await fetch('/api/sync', { method: 'POST' });
+          if (resSync.ok) triggered = true;
+        } catch (err) {
+          console.warn('Endpoint /api/sync indisponível', err);
+        }
+        if (!triggered && state.localConfig?.update_url) {
           const res = await fetch(state.localConfig.update_url, { method: 'POST' });
           if (!res.ok) throw new Error(`Falha ao chamar update (${res.status})`);
         }
@@ -1421,7 +1479,14 @@ function bindTabs() {
     btn.disabled = true;
     (async () => {
       try {
-        if (state.localConfig?.update_url) {
+        let triggered = false;
+        try {
+          const resSync = await fetch('/api/sync', { method: 'POST' });
+          if (resSync.ok) triggered = true;
+        } catch (err) {
+          console.warn('Endpoint /api/sync indisponível', err);
+        }
+        if (!triggered && state.localConfig?.update_url) {
           const res = await fetch(state.localConfig.update_url, { method: 'POST' });
           if (!res.ok) throw new Error(`Falha ao chamar update (${res.status})`);
         }
