@@ -1,4 +1,4 @@
-"""Produce consolidated datasets for the portal (processes, KPIs, alerts, meta)."""
+"""Generate consolidated KPIs and alerts using persisted DB data."""
 from __future__ import annotations
 
 import json
@@ -8,13 +8,13 @@ from pathlib import Path
 from statistics import mean
 from typing import Any, Dict, Iterable, List, Optional
 
+from scripts.db import Company, Process, init_db, session_scope
+from scripts.flatten_steps import delivery_events, load_delivery_payloads
+from scripts.fuse_sources import merge_events
 from scripts.utils.logger import log
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
-API_FILE = DATA / "api_processes.json"
-EVENTS_FILE = DATA / "events.json"
-COMPANIES_FILE = DATA / "companies_obligations.json"
 PROC_OUT = DATA / "processes.json"
 KPI_FILE = DATA / "kpis.json"
 ALERTS_FILE = DATA / "alerts.json"
@@ -22,49 +22,42 @@ META_FILE = DATA / "meta.json"
 CONFIG = ROOT / "scripts" / "config.json"
 
 
-def load_json(path: Path) -> Any:
-    if not path.exists():
-        return []
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def load_config() -> Dict[str, Any]:
-    return json.loads(CONFIG.read_text(encoding="utf-8"))
+    if CONFIG.exists():
+        return json.loads(CONFIG.read_text(encoding="utf-8"))
+    return {}
 
 
-def normalize_date(value: Optional[str]) -> Optional[str]:
+def normalize_date(value: Optional[datetime]) -> Optional[str]:
     if not value:
         return None
-    try:
-        if len(value) >= 10 and value[4] == "-":
-            return value[:10]
-        if "/" in value:
-            parsed = datetime.strptime(value, "%d/%m/%Y")
-            return parsed.strftime("%Y-%m-%d")
-    except ValueError:
-        return None
-    return value[:10]
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    return None
 
 
-def build_processes(api_rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def load_processes_from_db() -> List[Dict[str, Any]]:
+    init_db()
+    with session_scope() as session:
+        records = (
+            session.query(Process)
+            .outerjoin(Company, Company.id == Process.company_id)
+            .all()
+        )
+
     processes: List[Dict[str, Any]] = []
-    for row in api_rows:
-        if not isinstance(row, dict):
-            continue
-        proc_id = str(row.get("ProcID") or row.get("proc_id") or "").strip()
-        if not proc_id:
-            continue
+    for record in records:
         processes.append(
             {
-                "proc_id": proc_id,
-                "empresa": row.get("EmpNome") or row.get("empresa"),
-                "cnpj": row.get("EmpCNPJ") or row.get("cnpj"),
-                "inicio": normalize_date(row.get("ProcInicio") or row.get("inicio")),
-                "conclusao": normalize_date(row.get("ProcConclusao") or row.get("conclusao")),
-                "dias_corridos": int(float(row.get("ProcDiasCorridos") or row.get("dias_corridos") or 0)),
-                "status": row.get("ProcStatusLabel") or row.get("ProcStatus") or row.get("status"),
-                "gestor": row.get("ProcGestor") or row.get("gestor"),
-                "ultimo_update": row.get("DtLastDH") or row.get("ultimo_update"),
+                "proc_id": record.proc_id,
+                "empresa": record.company.nome if record.company else None,
+                "cnpj": record.company_id,
+                "inicio": normalize_date(record.inicio),
+                "conclusao": normalize_date(record.conclusao),
+                "dias_corridos": record.dias_corridos,
+                "status": record.status,
+                "gestor": record.gestor,
+                "ultimo_update": record.last_dh.isoformat() if record.last_dh else None,
             }
         )
     return processes
@@ -73,29 +66,21 @@ def build_processes(api_rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def obligations_counters(events: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     by_subtipo = Counter()
     by_status = Counter()
+    totals = Counter()
     for event in events:
         if event.get("categoria") != "obrigacao":
             continue
         subtipo = (event.get("subtipo") or "").strip() or "Sem subtipo"
         status = (event.get("status") or "").strip() or "Sem status"
+        competencia = (event.get("competencia") or "").strip() or "Sem competencia"
         by_subtipo[subtipo] += 1
         by_status[status] += 1
+        totals[status] += 1
     return {
         "by_subtipo": dict(by_subtipo),
         "by_status": dict(by_status),
+        "totals": dict(totals),
     }
-
-
-def aggregate_company_totals(companies: Iterable[Dict[str, Any]]) -> Dict[str, int]:
-    totals: defaultdict[str, int] = defaultdict(int)
-    for company in companies:
-        counters = (company or {}).get("counters", {}).get("totals", {})
-        for key, value in counters.items():
-            try:
-                totals[key] += int(value or 0)
-            except (TypeError, ValueError):
-                continue
-    return dict(totals)
 
 
 def process_status_counts(processes: Iterable[Dict[str, Any]]) -> Dict[str, int]:
@@ -149,8 +134,8 @@ def build_alerts(events: Iterable[Dict[str, Any]], cfg: Dict[str, Any]) -> Dict[
 
         subtipo = (event.get("subtipo") or "").lower()
         status = (event.get("status") or "").lower()
-        prazo = normalize_date(event.get("prazo"))
-        entrega = normalize_date(event.get("entrega"))
+        prazo = event.get("prazo")
+        entrega = event.get("entrega")
 
         if entrega and status.startswith("entreg"):
             continue
@@ -193,43 +178,26 @@ def build_alerts(events: Iterable[Dict[str, Any]], cfg: Dict[str, Any]) -> Dict[
         "efd_contrib_em_risco": efd_alerts,
         "bloqueantes": bloqueantes,
     }
-    for company in companies:
-        counters = (company or {}).get("counters", {}).get("totals", {})
-        for key in totals:
-            totals[key] += int(counters.get(key, 0) or 0)
-    kpis.setdefault("companies", {})["obligations_totals"] = totals
+
+
+def company_totals_from_deliveries() -> Dict[str, int]:
+    deliveries = delivery_events(load_delivery_payloads())
+    totals: defaultdict[str, int] = defaultdict(int)
+    for event in deliveries:
+        status = (event.get("status") or "").strip() or "Sem status"
+        totals[status] += 1
+    return dict(totals)
 
 
 def main() -> None:
     cfg = load_config()
-    api_rows = load_json(API_FILE)
-    events = load_json(EVENTS_FILE)
-    companies = load_json(COMPANIES_FILE)
+    processes = load_processes_from_db()
+    events, _ = merge_events()
 
+    log(
+        "build", "INFO", "Linhas carregadas", processes=len(processes), events=len(events)
+    )
 
-def enrich_with_companies(kpis: Dict[str, Any], companies: Iterable[Dict[str, Any]]) -> None:
-    totals = {
-        "entregues": 0,
-        "atrasadas": 0,
-        "proximos30": 0,
-        "futuras30": 0,
-    }
-    for company in companies:
-        counters = (company or {}).get("counters", {}).get("totals", {})
-        for key in totals:
-            totals[key] += int(counters.get(key, 0) or 0)
-    kpis.setdefault("companies", {})["obligations_totals"] = totals
-
-
-def main() -> None:
-    cfg = load_config()
-    api_rows = load_json(API_FILE)
-    events = load_json(EVENTS_FILE)
-    companies = load_json(COMPANIES_FILE)
-
-    log("build", "INFO", "Linhas carregadas", api=len(api_rows), events=len(events), companies=len(companies))
-
-    processes = build_processes(api_rows)
     PROC_OUT.write_text(json.dumps(processes, ensure_ascii=False, indent=2), encoding="utf-8")
 
     obligations_data = obligations_counters(events)
@@ -239,12 +207,8 @@ def main() -> None:
             "avg_days_concluded": average_days_concluded(processes),
         },
         "obligations": obligations_data,
+        "companies": {"obligations_totals": company_totals_from_deliveries()},
     }
-    enrich_with_companies(kpis, companies)
-    if not events:
-        fallback = aggregate_company_totals(companies)
-        if fallback:
-            obligations_data["totals"] = fallback
     KPI_FILE.write_text(json.dumps(kpis, ensure_ascii=False, indent=2), encoding="utf-8")
 
     alerts = build_alerts(events, cfg)
@@ -255,12 +219,17 @@ def main() -> None:
         "counts": {
             "processes": len(processes),
             "events": len(events),
-            "companies": len(companies),
         },
     }
     META_FILE.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    log("build", "INFO", "Arquivos gerados", processes=len(processes), alerts=len(alerts.get("bloqueantes", [])))
+    log(
+        "build",
+        "INFO",
+        "Arquivos gerados",
+        processes=len(processes),
+        alerts=len(alerts.get("bloqueantes", [])),
+    )
 
 
 if __name__ == "__main__":

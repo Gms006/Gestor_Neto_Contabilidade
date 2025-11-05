@@ -1,4 +1,4 @@
-"""Fetch company obligation snapshots from Acessórias."""
+"""Collect companies and their obligations from the Acessórias API."""
 from __future__ import annotations
 
 import json
@@ -8,17 +8,17 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from dateutil import parser
-
+from dotenv import load_dotenv
 
 from scripts.acessorias_client import AcessoriasClient
+from scripts.db import init_db, session_scope, upsert_companies
 from scripts.utils.logger import log
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
-CONFIG_PATH = ROOT / "scripts" / "config.json"
-OUTPUT = DATA / "companies_obligations.json"
+SNAPSHOT = DATA / "companies_obligations.json"
 
+load_dotenv(dotenv_path=ROOT / ".env", override=True)
 
 STATUS_FIELDS = ("Status", "status", "EntStatus", "situacao")
 TYPE_FIELDS = ("Tipo", "tipo", "Obligation", "obrigacao", "Descricao", "descricao")
@@ -27,11 +27,7 @@ DELIVERY_FIELDS = ("Entrega", "entrega", "EntDtEntrega")
 
 
 def ensure_dirs() -> None:
-    DATA.mkdir(exist_ok=True)
-
-
-def load_config() -> Dict[str, Any]:
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    DATA.mkdir(parents=True, exist_ok=True)
 
 
 def parse_date(value: Any) -> Optional[datetime]:
@@ -40,10 +36,12 @@ def parse_date(value: Any) -> Optional[datetime]:
     if isinstance(value, datetime):
         return value
     try:
-        dt = parser.parse(str(value))
-        return dt
-    except (ValueError, TypeError, parser.ParserError):
-        return None
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        try:
+            return datetime.strptime(str(value), "%Y-%m-%d")
+        except ValueError:
+            return None
 
 
 def classify_obligation(record: Dict[str, Any], today: datetime) -> str:
@@ -91,39 +89,55 @@ def build_counters(obligations: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def main() -> None:
-    token = (os.getenv("ACESSORIAS_TOKEN") or "").strip()
-    if not token:
-        raise RuntimeError("ACESSORIAS_TOKEN ausente no .env (ou vazio).")
+def collect_companies() -> List[Dict[str, Any]]:
+    client = AcessoriasClient()
+    page = 1
+    aggregated: List[Dict[str, Any]] = []
+    while True:
+        rows = client.list_companies(page=page)
+        if not rows:
+            break
+        aggregated.extend(rows)
+        log("fetch_companies", "INFO", "pagina_companies", page=page, registros=len(rows))
+        page += 1
+    return aggregated
 
+
+def persist_companies(rows: List[Dict[str, Any]]) -> None:
+    init_db()
+    with session_scope() as session:
+        count = upsert_companies(session, rows)
+        # CODEx: upsert garante que o frontend tenha dados mesmo sem API.
+        log("fetch_companies", "INFO", "companies_persistidos", total=count)
+
+
+def build_snapshot(rows: List[Dict[str, Any]]) -> None:
     ensure_dirs()
-
-    cfg = load_config()
-    acessorias_cfg = cfg.get("acessorias", {})
-    client = AcessoriasClient(
-        base_url=acessorias_cfg.get("base_url"),
-        rate_budget=int(acessorias_cfg.get("rate_budget", 90)),
-    )
-
-    log("fetch_companies", "INFO", "Coletando obrigações por empresa")
-    companies = client.list_companies_obligations()
-    log("fetch_companies", "INFO", "Empresas coletadas", total=len(companies))
-
     processed: List[Dict[str, Any]] = []
-    for company in companies:
+    for company in rows:
         obligations = company.get("Obligations") or company.get("obligations") or []
         counters = build_counters(obligations if isinstance(obligations, list) else [])
         processed.append(
             {
-                "empresa": company.get("RazaoSocial") or company.get("Nome") or company.get("Fantasia") or company.get("empresa"),
+                "empresa": company.get("RazaoSocial")
+                or company.get("Nome")
+                or company.get("Fantasia")
+                or company.get("empresa"),
                 "cnpj": company.get("CNPJ") or company.get("cnpj"),
                 "raw": company,
                 "counters": counters,
             }
         )
 
-    OUTPUT.write_text(json.dumps(processed, ensure_ascii=False, indent=2), encoding="utf-8")
-    log("fetch_companies", "INFO", "Salvo companies_obligations.json", total=len(processed))
+    SNAPSHOT.write_text(json.dumps(processed, ensure_ascii=False, indent=2), encoding="utf-8")
+    log("fetch_companies", "INFO", "snapshot_companies", arquivo=str(SNAPSHOT), total=len(processed))
+
+
+def main() -> None:
+    ensure_dirs()
+    rows = collect_companies()
+    persist_companies(rows)
+    build_snapshot(rows)
 
 
 if __name__ == "__main__":

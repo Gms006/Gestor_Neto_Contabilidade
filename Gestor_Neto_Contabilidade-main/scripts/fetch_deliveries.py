@@ -1,64 +1,35 @@
-# -*- coding: utf-8 -*-
-"""Collect deliveries from Acessórias API with incremental day slices."""
+"""Collect deliveries (obrigações) and persist them locally."""
 from __future__ import annotations
 
-import os
 import json
-from datetime import date, datetime, timedelta, time, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dateutil import parser
 from dotenv import load_dotenv
 
-# ---- logger com fallback -----------------------------------
-try:
-    from scripts.utils.logger import log  # preferencial
-except Exception:
-    import logging, sys, json as _json_fallback
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
-    _logger = logging.getLogger("fetch_deliveries")
-
-    def log(src: str, level: str, msg: str, **meta):
-        lvl = getattr(logging, (level or "INFO").upper(), logging.INFO)
-        if meta:
-            try:
-                meta_str = _json_fallback.dumps(meta, ensure_ascii=False)
-            except Exception:
-                meta_str = str(meta)
-            _logger.log(lvl, "%s | %s | %s", src, msg, meta_str)
-        else:
-            _logger.log(lvl, "%s | %s", src, msg)
-
-# ---- normalization com fallback -----------------------------
-try:
-    from scripts.utils.normalization import normalize_structure
-except Exception:
-    def normalize_structure(x):  # type: ignore
-        return x
-
 from scripts.acessorias_client import AcessoriasClient
+from scripts.db import init_db, session_scope, upsert_deliveries
+from scripts.utils.logger import log
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
-CONFIG_PATH = ROOT / "scripts" / "config.json"
+SNAPSHOT = DATA / "deliveries_raw.json"
 SYNC_STATE = DATA / ".sync_state.json"
-OUTPUT = DATA / "deliveries_raw.json"
+CONFIG_PATH = ROOT / "scripts" / "config.json"
 
-# Carrega .env da raiz do projeto
 load_dotenv(dotenv_path=ROOT / ".env", override=True)
 
 
 def ensure_dirs() -> None:
-    DATA.mkdir(exist_ok=True)
+    DATA.mkdir(parents=True, exist_ok=True)
 
 
 def load_config() -> Dict[str, Any]:
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    if CONFIG_PATH.exists():
+        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    return {}
 
 
 def load_sync_state() -> Dict[str, Any]:
@@ -74,121 +45,136 @@ def save_sync_state(state: Dict[str, Any]) -> None:
     SYNC_STATE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _parse_last(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        dt_last = parser.isoparse(value)
-    except (ValueError, TypeError, parser.ParserError):
-        return None
-    if dt_last.tzinfo:
-        dt_last = dt_last.astimezone().replace(tzinfo=None)
-    return dt_last
-
-
 def compute_dt_last_dh(last_value: Optional[str]) -> str:
-    floor = datetime.combine(date.today() - timedelta(days=1), time.min)
-    parsed = _parse_last(last_value)
-    if not parsed:
-        parsed = floor
-    else:
-        parsed = parsed - timedelta(minutes=5)
-        if parsed < floor:
-            parsed = floor
-    return parsed.strftime("%Y-%m-%d %H:%M:%S")
+    if last_value:
+        try:
+            parsed = parser.isoparse(last_value)
+        except (ValueError, TypeError, parser.ParserError):
+            parsed = None
+        if parsed:
+            parsed = parsed.astimezone(timezone.utc).replace(microsecond=0)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+            if parsed < cutoff:
+                parsed = cutoff
+            return parsed.strftime("%Y-%m-%d %H:%M:%S")
+
+    today = datetime.now(timezone.utc)
+    yesterday = today - timedelta(days=1)
+    return yesterday.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def daterange(days_back: int, days_forward: int) -> List[date]:
+def iter_pages(fn, **kwargs):
+    page = 1
+    while True:
+        rows = fn(page=page, **kwargs)
+        if not rows:
+            break
+        yield rows
+        page += 1
+
+
+def collect_delta(client: AcessoriasClient, dt_last_dh: str) -> List[Dict[str, Any]]:
+    parsed = datetime.strptime(dt_last_dh, "%Y-%m-%d %H:%M:%S")
+    target_date = parsed.date()
     today = date.today()
-    return [today + timedelta(days=offset) for offset in range(-days_back, days_forward + 1)]
+    if target_date < today:
+        dt_initial = target_date.strftime("%Y-%m-%d")
+    else:
+        dt_initial = today.strftime("%Y-%m-%d")
+    dt_final = dt_initial
+
+    aggregated: List[Dict[str, Any]] = []
+    for rows in iter_pages(
+        client.list_deliveries_listall,
+        dt_initial=dt_initial,
+        dt_final=dt_final,
+        dt_last_dh=dt_last_dh,
+        include_config=False,
+    ):
+        aggregated.extend(rows)
+        log("fetch_deliveries", "INFO", "pagina_delta", count=len(rows), dt=dt_initial)
+    return aggregated
+
+
+def collect_history(client: AcessoriasClient, cnpjs: List[str], start: date, end: date) -> List[Dict[str, Any]]:
+    aggregated: List[Dict[str, Any]] = []
+    dt_initial = start.strftime("%Y-%m-%d")
+    dt_final = end.strftime("%Y-%m-%d")
+    for cnpj in cnpjs:
+        for rows in iter_pages(
+            client.list_deliveries_by_cnpj,
+            cnpj=cnpj,
+            dt_initial=dt_initial,
+            dt_final=dt_final,
+            include_config=False,
+        ):
+            aggregated.extend(rows)
+            # CODEx: histórico por CNPJ garante preenchimento dos cards do dashboard.
+            log("fetch_deliveries", "INFO", "pagina_historico", cnpj=cnpj, count=len(rows))
+    return aggregated
+
+
+def load_company_ids() -> List[str]:
+    from scripts.db import Company
+
+    init_db()
+    with session_scope() as session:
+        companies = session.query(Company).all()
+        return [company.id for company in companies if company.id]
+
+
+def persist_deliveries(rows: List[Dict[str, Any]]) -> None:
+    if not rows:
+        log("fetch_deliveries", "INFO", "Nenhuma entrega para persistir")
+        return
+
+    init_db()
+    with session_scope() as session:
+        total = upsert_deliveries(session, rows)
+        log("fetch_deliveries", "INFO", "deliveries_persistidos", total=total)
+
+
+def build_snapshot(rows: List[Dict[str, Any]]) -> None:
+    ensure_dirs()
+    SNAPSHOT.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    log("fetch_deliveries", "INFO", "snapshot_deliveries", arquivo=str(SNAPSHOT), total=len(rows))
 
 
 def main() -> None:
-    # token do .env
-    token = (os.getenv("ACESSORIAS_TOKEN") or "").strip()
-    if not token:
-        raise RuntimeError("ACESSORIAS_TOKEN ausente no .env (ou vazio).")
-    # garante disponibilidade para clients que leem do ambiente
-    os.environ["ACESSORIAS_TOKEN"] = token
-
     ensure_dirs()
-
     cfg = load_config()
-    acessorias_cfg = cfg.get("acessorias", {})
     deliveries_cfg = cfg.get("deliveries", {})
-    if not deliveries_cfg.get("enabled", True):
-        log("fetch_deliveries", "INFO", "Deliveries desabilitado; encerrando")
-        return
 
+    client = AcessoriasClient()
     sync_state = load_sync_state()
-    last_sync = (sync_state.get("deliveries") or {}).get("last_sync")
-    dt_last_dh: Optional[str] = None
-    if deliveries_cfg.get("use_dt_last_dh", True):
-        dt_last_dh = compute_dt_last_dh(last_sync)
 
-    identificador = deliveries_cfg.get("identificador", "ListAll")
-    if identificador == "ListAll" and not dt_last_dh:
-        dt_last_dh = compute_dt_last_dh(None)
+    history_days = int(deliveries_cfg.get("history_days", deliveries_cfg.get("days_back", 180)))
+    history_end = date.today()
+    history_start = history_end - timedelta(days=history_days)
 
-    client = AcessoriasClient(
-        base_url=acessorias_cfg.get("base_url"),
-        rate_budget=int(acessorias_cfg.get("rate_budget", 90)),
-    )
+    dt_last_dh = compute_dt_last_dh((sync_state.get("deliveries") or {}).get("last_sync"))
 
-    days_back = int(deliveries_cfg.get("days_back", 0))
-    days_forward = int(deliveries_cfg.get("days_forward", 0))
-    include_config = True
+    history_rows: List[Dict[str, Any]] = []
+    try:
+        cnpjs = load_company_ids()
+        history_rows = collect_history(client, cnpjs, history_start, history_end)
+    except Exception as exc:
+        log("fetch_deliveries", "ERROR", "historico_falhou", error=str(exc))
 
-    aggregated: List[Dict[str, Any]] = []
-    days = daterange(days_back, days_forward)
-    if days:
-        range_start = days[0].strftime("%Y-%m-%d")
-        range_end = days[-1].strftime("%Y-%m-%d")
-    else:
-        range_start = range_end = date.today().strftime("%Y-%m-%d")
+    delta_rows: List[Dict[str, Any]] = []
+    try:
+        delta_rows = collect_delta(client, dt_last_dh)
+    except Exception as exc:
+        log("fetch_deliveries", "ERROR", "delta_falhou", error=str(exc))
 
-    log(
-        "fetch_deliveries",
-        "INFO",
-        "Iniciando coleta",
-        identificador=identificador,
-        dt_last_dh=dt_last_dh,
-        dias=len(days) or 1,
-        range_inicio=range_start,
-        range_fim=range_end,
-    )
-
-    failed_days: List[str] = []
-
-    for target_day in days or [date.today()]:
-        day_str = target_day.strftime("%Y-%m-%d")
-        log("fetch_deliveries","INFO","Coletando dia",
-            identificador=identificador, dt_initial=day_str, dt_last_dh=dt_last_dh)
-        try:
-            rows = client.list_deliveries(
-                identificador=identificador,
-                dt_initial=day_str,
-                dt_final=day_str,
-                dt_last_dh=dt_last_dh,
-                include_config=include_config,
-            )
-            log("fetch_deliveries","INFO","Dia coletado", day=day_str, count=len(rows))
-            aggregated.extend(rows)
-        except Exception as exc:
-            failed_days.append(day_str)
-            log("fetch_deliveries","ERROR","Falha list_deliveries",
-                day=day_str, error=str(exc))
-            continue
-
-    normalized = [normalize_structure(item) for item in aggregated]
-    OUTPUT.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
-    log("fetch_deliveries","INFO","Salvo deliveries_raw.json",
-        total=len(normalized), dias_falhos=failed_days)
+    combined = history_rows + delta_rows
+    persist_deliveries(combined)
+    build_snapshot(combined)
 
     now_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     sync_state.setdefault("deliveries", {})["last_sync"] = now_utc
     save_sync_state(sync_state)
-    log("fetch_deliveries", "INFO", "Atualizado sync", last_sync=now_utc)
+    log("fetch_deliveries", "INFO", "sync_state_atualizado", last_sync=now_utc)
 
 
 if __name__ == "__main__":

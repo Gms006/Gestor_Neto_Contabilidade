@@ -1,26 +1,25 @@
-"""Fuse API and email events into a consolidated dataset."""
+"""Merge API-derived events with email events and persist the results."""
 from __future__ import annotations
 
 import hashlib
-import hashlib
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, List, Tuple
 
+from scripts.flatten_steps import build_api_events
 from scripts.utils.logger import log
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
-EVT_API = DATA / "events_api.json"
 EVT_MAIL = DATA / "events_email.json"
 OUT_EVENTS = DATA / "events.json"
 OUT_DIVERG = DATA / "divergences.json"
 
 
-def load_events(path: Path) -> List[Dict[str, Any]]:
-    if not path.exists():
+def load_email_events() -> List[Dict[str, Any]]:
+    if not EVT_MAIL.exists():
         return []
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(EVT_MAIL.read_text(encoding="utf-8"))
 
 
 def make_key(event: Dict[str, Any]) -> str:
@@ -45,7 +44,10 @@ def prefer_email(event: Dict[str, Any]) -> bool:
     return any(token in blob for token in ("mit", "dispensa", "confirma"))
 
 
-def fuse(api_events: Iterable[Dict[str, Any]], email_events: Iterable[Dict[str, Any]]):
+def merge_events() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    api_events = build_api_events()
+    email_events = load_email_events()
+
     merged: Dict[str, Dict[str, Any]] = {}
     divergences: List[Dict[str, Any]] = []
 
@@ -59,7 +61,6 @@ def fuse(api_events: Iterable[Dict[str, Any]], email_events: Iterable[Dict[str, 
             merged[key] = event
             continue
         if existing.get("categoria") == "obrigacao" and event.get("categoria") == "obrigacao":
-            # keep API version
             continue
         if prefer_email(event):
             divergences.append({
@@ -73,15 +74,17 @@ def fuse(api_events: Iterable[Dict[str, Any]], email_events: Iterable[Dict[str, 
 
 
 def main() -> None:
-    api_events = load_events(EVT_API)
-    email_events = load_events(EVT_MAIL)
-    log("fuse_sources", "INFO", "Eventos carregados", api=len(api_events), email=len(email_events))
-
-    merged, divergences = fuse(api_events, email_events)
-    OUT_EVENTS.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+    events, divergences = merge_events()
+    DATA.mkdir(parents=True, exist_ok=True)
+    OUT_EVENTS.write_text(json.dumps(events, ensure_ascii=False, indent=2), encoding="utf-8")
     OUT_DIVERG.write_text(json.dumps(divergences, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    log("fuse_sources", "INFO", "Fusionados", total=len(merged), divergencias=len(divergences))
+    log(
+        "fuse_sources",
+        "INFO",
+        "Fusionados",
+        total=len(events),
+        divergencias=len(divergences),
+    )
 
 
 if __name__ == "__main__":

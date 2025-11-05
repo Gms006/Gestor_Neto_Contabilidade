@@ -1,4 +1,4 @@
-"""Generate API events from processes and deliveries."""
+"""Derive structured events from processes and deliveries stored in the DB."""
 from __future__ import annotations
 
 import json
@@ -6,20 +6,64 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from scripts.db import Delivery, Process, init_db, session_scope
 from scripts.utils.logger import log
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
-API_FILE = DATA / "api_processes.json"
-DELIVERIES_FILE = DATA / "deliveries_raw.json"
 EVENTS_API = DATA / "events_api.json"
 RULES_PATH = ROOT / "scripts" / "rules.json"
 
 
-def load_json(p: Path) -> Any:
-    if not p.exists():
+def load_rules() -> List[Dict[str, Any]]:
+    if not RULES_PATH.exists():
         return []
-    return json.loads(p.read_text(encoding="utf-8"))
+    raw = json.loads(RULES_PATH.read_text(encoding="utf-8"))
+    return raw.get("matchers", []) if isinstance(raw, dict) else []
+
+
+def load_process_payloads() -> List[Dict[str, Any]]:
+    init_db()
+    with session_scope() as session:
+        records = session.query(Process).all()
+    payloads: List[Dict[str, Any]] = []
+    for record in records:
+        data: Dict[str, Any] = {}
+        if record.raw_payload:
+            try:
+                data = json.loads(record.raw_payload)
+            except json.JSONDecodeError:
+                data = {}
+        data.setdefault("ProcID", record.proc_id)
+        if record.company_id and not data.get("EmpresaCNPJ"):
+            data["EmpresaCNPJ"] = record.company_id
+        payloads.append(data)
+    return payloads
+
+
+def load_delivery_payloads() -> List[Dict[str, Any]]:
+    init_db()
+    with session_scope() as session:
+        records = session.query(Delivery).all()
+    payloads: List[Dict[str, Any]] = []
+    for record in records:
+        data: Dict[str, Any] = {}
+        if record.detalhes:
+            try:
+                data = json.loads(record.detalhes)
+            except json.JSONDecodeError:
+                data = {}
+        data.setdefault("CNPJ", record.company_id)
+        if record.nome:
+            data.setdefault("Nome", record.nome)
+        payloads.append(data)
+    return payloads
+
+
+def load_json(path: Path) -> Any:
+    if not path.exists():
+        return []
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def match_rule(name: str, rules: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -63,8 +107,8 @@ def competence_from_date(date_iso: Optional[str]) -> Optional[str]:
 def flatten_proc(proc: Dict[str, Any], rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     pid = str(proc.get("ProcID") or proc.get("ProcId") or "")
-    emp = proc.get("EmpNome") or proc.get("Empresa")
-    cnpj = proc.get("EmpCNPJ") or proc.get("CNPJ")
+    emp = proc.get("EmpNome") or proc.get("Empresa") or proc.get("ProcEmpresaNome")
+    cnpj = proc.get("EmpCNPJ") or proc.get("CNPJ") or proc.get("ProcEmpresaCNPJ")
     regime = proc.get("ProcDepartamento") or proc.get("Departamento") or ""
     passos = proc.get("ProcPassos") or []
 
@@ -115,7 +159,8 @@ def flatten_proc(proc: Dict[str, Any], rules: List[Dict[str, Any]]) -> List[Dict
             if isinstance(sub, list) and sub:
                 walk(sub)
 
-    walk(passos)
+    if isinstance(passos, list):
+        walk(passos)
     return out
 
 
@@ -173,25 +218,25 @@ def delivery_events(deliveries: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]
     return events
 
 
-def main() -> None:
-    processes = load_json(API_FILE)
-    deliveries = load_json(DELIVERIES_FILE)
-    rules = load_json(RULES_PATH).get("matchers", [])
+def build_api_events(rules: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    rules = rules if rules is not None else load_rules()
+    processes = load_process_payloads()
+    deliveries = load_delivery_payloads()
 
-    log("flatten_steps", "INFO", "Processando processos", count=len(processes))
     all_events: List[Dict[str, Any]] = []
     for proc in processes:
         if isinstance(proc, dict):
             all_events.extend(flatten_proc(proc, rules))
 
-    log("flatten_steps", "INFO", "Eventos de passos", total=len(all_events))
+    all_events.extend(delivery_events(deliveries))
+    return all_events
 
-    delivery_evts = delivery_events(deliveries)
-    log("flatten_steps", "INFO", "Eventos de deliveries", total=len(delivery_evts))
-    all_events.extend(delivery_evts)
 
-    EVENTS_API.write_text(json.dumps(all_events, ensure_ascii=False, indent=2), encoding="utf-8")
-    log("flatten_steps", "INFO", "Salvo events_api.json", total=len(all_events))
+def main() -> None:
+    events = build_api_events()
+    DATA.mkdir(parents=True, exist_ok=True)
+    EVENTS_API.write_text(json.dumps(events, ensure_ascii=False, indent=2), encoding="utf-8")
+    log("flatten_steps", "INFO", "Salvo events_api.json", total=len(events))
 
 
 if __name__ == "__main__":

@@ -59,9 +59,9 @@ if (Test-Path "data\events.json") {
 
 # Subir site local (opcional)
 if ($Serve) {
-  Write-Host "`nServidor: http://localhost:8000/web/" -ForegroundColor Magenta
-  Start-Process powershell -ArgumentList "-NoExit","-Command","cd `"$Root`"; python -m http.server 8000"
-  Start-Process "http://localhost:8000/web/"
+  Write-Host "`nServidor: http://localhost:8088/web/" -ForegroundColor Magenta
+  Start-Process powershell -ArgumentList "-NoExit","-Command","cd `"$Root`"; uvicorn scripts.server:app --host 127.0.0.1 --port 8088"
+  Start-Process "http://localhost:8088/web/"
 }
 
 Write-Host "`nOK" -ForegroundColor Cyan
