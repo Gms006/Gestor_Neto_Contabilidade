@@ -8,24 +8,28 @@ function required(name: string): string {
   return v;
 }
 
+const DEFAULT_ACESSORIAS_BASE = "https://api.acessorias.com";
+
+function resolveAcessoriasBase() {
+  const candidate =
+    process.env.ACESSORIAS_API_BASE ?? process.env.ACESSORIAS_BASE_URL ?? "";
+  return candidate.trim() || DEFAULT_ACESSORIAS_BASE;
+}
+
 export const env = {
   NODE_ENV: process.env.NODE_ENV ?? "development",
   PORT: Number(process.env.PORT ?? 8088),
 
   // Acessórias API
-  ACESSORIAS_BASE_URL: required("ACESSORIAS_BASE_URL"),
+  ACESSORIAS_BASE_URL: resolveAcessoriasBase(),
+  ACESSORIAS_API_BASE: resolveAcessoriasBase(),
   ACESSORIAS_TOKEN: required("ACESSORIAS_TOKEN"),
-  ACESSORIAS_API_BASE: process.env.ACESSORIAS_API_BASE ?? "",
-  ACESSORIAS_API_VERSION: process.env.ACESSORIAS_API_VERSION ?? "",
-  ACESSORIAS_PATH_LANG: process.env.ACESSORIAS_PATH_LANG ?? "en",
 
   // ✅ alias compatível com o acessoriasClient
   acessorias: {
-    baseURL: required("ACESSORIAS_BASE_URL"),
+    baseURL: resolveAcessoriasBase(),
+    apiBase: resolveAcessoriasBase(),
     token: required("ACESSORIAS_TOKEN"),
-    apiBase: process.env.ACESSORIAS_API_BASE ?? "",
-    apiVersion: process.env.ACESSORIAS_API_VERSION ?? "",
-    pathLang: process.env.ACESSORIAS_PATH_LANG ?? "en",
   },
 
   // Prisma logs opcionais: PRISMA_LOG=query,info,warn,error

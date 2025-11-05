@@ -1,126 +1,152 @@
-// src/services/syncService.ts
+import { subMonths, subSeconds, startOfMonth, endOfMonth } from "date-fns";
+import { listCompanies, listProcesses, listDeliveries } from "../clients/acessoriasClient";
+import { fmtDH, fmtDate } from "../lib/date";
 import { logger } from "../lib/logger";
 import {
-  listCompanies,
-  listProcesses,
-  listDeliveries,
-} from "../clients/acessoriasClient";
-import {
-  upsertEmpresasBatch, // Atualizado para PT
-  upsertProcessosBatch, // Atualizado para PT
-  upsertEntregasBatch, // Atualizado para PT
- // Novo
   getSyncState,
   setSyncState,
+  upsertCompaniesBatch,
+  upsertProcessesBatch,
+  upsertDeliveriesBatch,
 } from "../repositories/acessoriasRepo";
-import { subSeconds } from "date-fns"; // Para janela de segurança
 
-type SyncOptions = {
+export type SyncOptions = {
   full?: boolean;
-  monthsHistory?: number;      // janelinha de histórico na primeira carga incremental
-  statuses?: string[] | "ALL"; // se a API aceitar filtro de status
+  monthsHistory?: number;
+  statuses?: string[] | "ALL";
 };
 
-const NOW_ISO = () => new Date().toISOString();
-
-// Janela de segurança: updated_after = last_confirmed - 90s
 const SAFETY_WINDOW_SECONDS = 90;
 
-async function getLastDhOrFallback(key: string, monthsHistory = 6): Promise<string> {
-  // tenta pegar do SyncState; se não houver, volta "agora - N meses"
-  const val = await getSyncState(key);
-  let lastConfirmedDate: Date;
-
-  if (val) {
-    lastConfirmedDate = new Date(val);
-  } else {
-    const d = new Date();
-    d.setMonth(d.getMonth() - Math.max(0, monthsHistory));
-    lastConfirmedDate = d;
+async function getLastDhDate(key: string, monthsHistory = 6): Promise<Date> {
+  const stored = await getSyncState(key);
+  if (stored) {
+    const parsed = new Date(stored);
+    if (!Number.isNaN(parsed.getTime())) {
+      return subSeconds(parsed, SAFETY_WINDOW_SECONDS);
+    }
   }
-
-  // Aplica janela de segurança: last_confirmed - 90s
-  const updatedAfter = subSeconds(lastConfirmedDate, SAFETY_WINDOW_SECONDS);
-  return updatedAfter.toISOString();
+  const fallback = subMonths(new Date(), Math.max(0, monthsHistory));
+  return subSeconds(fallback, SAFETY_WINDOW_SECONDS);
 }
 
-// O syncCompaniesFull original foi removido, pois a listCompanies já usa o fetchWithRetry
-// e a documentação não indica DtLastDH para empresas.
-async function syncCompanies(opts: SyncOptions): Promise<number> {
-  const companies = await listCompanies();
-  await upsertEmpresasBatch(companies); // Atualizado para PT
-  logger.info({ total: companies.length }, "syncCompanies concluído");
-  await setSyncState("companies:last_dh", NOW_ISO());
-  return companies.length;
+async function syncCompanies(): Promise<number> {
+  let page = 1;
+  let total = 0;
+
+  while (true) {
+    const batch = await listCompanies(page);
+    if (!batch.length) {
+      break;
+    }
+    await upsertCompaniesBatch(batch);
+    total += batch.length;
+    logger.info({ resource: "companies", page, batch: batch.length }, "Página sincronizada");
+    page += 1;
+  }
+
+  await setSyncState("companies:last_dh", new Date().toISOString());
+  logger.info({ resource: "companies", total }, "syncCompanies concluído");
+  return total;
+}
+
+function resolveStatuses(input?: string[] | "ALL"): string[] {
+  if (!input || input === "ALL") {
+    return ["A", "C"];
+  }
+  const list = Array.isArray(input) ? input : [input];
+  return Array.from(new Set(list.map((code) => code.trim().toUpperCase()).filter(Boolean)));
 }
 
 async function syncProcesses(opts: SyncOptions): Promise<number> {
-  const { full = false, monthsHistory = 6, statuses = "ALL" } = opts;
-  let params: Record<string, any> = {};
+  const { full = false, monthsHistory = 6, statuses } = opts;
+  const statusList = resolveStatuses(statuses);
+  const lastDhDate = await getLastDhDate("processes:last_dh", monthsHistory);
+  const dtLastDh = full ? undefined : fmtDH(lastDhDate);
 
-  if (!full) {
-    const lastDh = await getLastDhOrFallback("processes:last_dh", monthsHistory);
-    params.DtLastDH = lastDh; // Corrigido para DtLastDH
+  let totalProcesses = 0;
+  let totalSteps = 0;
+
+  for (const statusCode of statusList) {
+    let page = 1;
+    while (true) {
+      const batch = await listProcesses({
+        page,
+        ProcStatus: statusCode,
+        DtLastDH: dtLastDh,
+      });
+      if (!batch.length) {
+        break;
+      }
+      const { processes, steps } = await upsertProcessesBatch(batch);
+      totalProcesses += processes;
+      totalSteps += steps;
+      logger.info(
+        { resource: "processes", status: statusCode, page, batch: batch.length },
+        "Página sincronizada"
+      );
+      page += 1;
+    }
   }
 
-  if (statuses && statuses !== "ALL") {
-    // O parâmetro correto é ProcStatus (singular) e aceita letras (ex: A, C, S)
-    // Se o front enviar uma lista, precisa ser convertida para o formato correto.
-    // Por enquanto, assumimos que o front envia o formato correto ou "ALL".
-    // Se for uma lista, vamos juntar com vírgula (CSV) ou usar o primeiro elemento.
-    // Como a doc sugere ProcStatus=A, vamos assumir que o front envia a string correta.
-    params.ProcStatus = Array.isArray(statuses) ? statuses.join(',') : statuses;
-  }
-
-  const processes = await listProcesses(params);
-  const { totalProcesses, totalEtapas } = await upsertProcessosBatch(processes); // upsertProcessosBatch deve retornar o total de etapas também
-
-  logger.info({ totalProcesses, full }, "syncProcesses concluído");
-  await setSyncState("processes:last_dh", NOW_ISO());
+  await setSyncState("processes:last_dh", new Date().toISOString());
+  logger.info(
+    { resource: "processes", totalProcesses, totalSteps, statuses: statusList },
+    "syncProcesses concluído"
+  );
   return totalProcesses;
 }
 
 async function syncDeliveries(opts: SyncOptions): Promise<number> {
   const { full = false, monthsHistory = 6 } = opts;
-  let params: Record<string, any> = {};
+  const now = new Date();
+  const dtInitial = fmtDate(startOfMonth(now));
+  const dtFinal = fmtDate(endOfMonth(now));
+  const lastDhDate = await getLastDhDate("deliveries:last_dh", monthsHistory);
+  const dtLastDh = fmtDH(full ? now : lastDhDate);
 
-  if (!full) {
-    const lastDh = await getLastDhOrFallback("deliveries:last_dh", monthsHistory);
-    params.DtLastDH = lastDh; // Corrigido para DtLastDH
+  let page = 1;
+  let total = 0;
+
+  while (true) {
+    const batch = await listDeliveries({
+      page,
+      DtInitial: dtInitial,
+      DtFinal: dtFinal,
+      DtLastDH: dtLastDh,
+    });
+    if (!batch.length) {
+      break;
+    }
+    await upsertDeliveriesBatch(batch);
+    total += batch.length;
+    logger.info({ resource: "deliveries", page, batch: batch.length }, "Página sincronizada");
+    page += 1;
   }
 
-  const deliveries = await listDeliveries(params);
-  await upsertEntregasBatch(deliveries); // Atualizado para PT
-
-  logger.info({ total: deliveries.length, full }, "syncDeliveries concluído");
-  await setSyncState("deliveries:last_dh", NOW_ISO());
-  return deliveries.length;
+  await setSyncState("deliveries:last_dh", new Date().toISOString());
+  logger.info({ resource: "deliveries", total }, "syncDeliveries concluído");
+  return total;
 }
 
-export async function syncAll(opts: SyncOptions = {}): Promise<{
-  companies: number;
-  processes: number;
-  deliveries: number;
-  finishedAt: string;
-}> {
+export async function syncAll(opts: SyncOptions = {}) {
   const { full = false } = opts;
-
   logger.info({ full, opts }, "Iniciando syncAll");
 
   let companies = 0;
   try {
-    companies = await syncCompanies(opts); // Usando a nova função syncCompanies
-  } catch (e: any) {
-    logger.warn({ err: e?.message }, "Companies não sincronizadas (erro). Seguindo…");
+    companies = await syncCompanies();
+  } catch (error: any) {
+    logger.warn({ err: error?.message }, "Falha ao sincronizar companies");
   }
 
   const processes = await syncProcesses(opts);
   const deliveries = await syncDeliveries(opts);
 
-  const finishedAt = NOW_ISO();
+  const finishedAt = new Date().toISOString();
   await setSyncState("global:last_sync", finishedAt);
 
-  logger.info({ companies, processes, deliveries }, "syncAll concluído");
+  logger.info({ companies, processes, deliveries, finishedAt }, "syncAll concluído");
   return { companies, processes, deliveries, finishedAt };
 }
 
