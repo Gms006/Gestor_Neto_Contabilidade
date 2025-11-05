@@ -4,19 +4,20 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# Ir para a raiz do projeto (onde está este script)
+# Ir para a raiz do projeto (onde está este script) e escolher Python (preferir .venv)
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location -LiteralPath $Root
-
-# Escolher Python do sistema (sem venv)
-$PY = "python"
-if (-not (Get-Command $PY -ErrorAction SilentlyContinue)) {
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    $PY = "py -3.10"
-  } else {
-    throw "Python 3.10+ não encontrado no PATH."
-  }
+$VenvPy = Join-Path $Root ".venv\Scripts\python.exe"
+if (Test-Path $VenvPy) {
+  $PY = $VenvPy
+} elseif (Get-Command python -ErrorAction SilentlyContinue) {
+  $PY = "python"
+} elseif (Get-Command py -ErrorAction SilentlyContinue) {
+  $PY = "py -3.10"
+} else {
+  throw "Python 3.10+ não encontrado no PATH."
 }
+
+Set-Location -LiteralPath $Root
 
 # Helper simples para rodar módulos
 function Run-Module {
