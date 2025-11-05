@@ -16,7 +16,10 @@
     <div class="max-w-7xl mx-auto px-4 py-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
       <div>
         <h1 class="text-xl font-semibold tracking-tight">Gestor — Portal Operacional</h1>
-        <p id="lastUpdate" class="text-sm text-slate-500" aria-live="polite"></p>
+        <p id="lastUpdate" class="text-sm text-slate-500 flex items-center gap-2" aria-live="polite">
+          <span id="badgeSource" class="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium">Fonte: carregando…</span>
+          <span id="badgeSync" class="text-xs text-slate-500"></span>
+        </p>
       </div>
       <div class="flex gap-2">
         <button id="btnRefresh" class="btn" type="button" aria-label="Atualizar dados">🔄 Atualizar dados</button>
@@ -97,7 +100,7 @@
   </main>
 
   <footer class="max-w-7xl mx-auto px-4 py-10 text-xs text-slate-500">
-    <p>Leitura local de <code>../data/*.json</code>. Sem backend. © Neto Contabilidade</p>
+    <p>© Neto Contabilidade — Plataforma integrada com a API Acessórias.</p>
   </footer>
 
   <script type="module" src="./app.js"></script>

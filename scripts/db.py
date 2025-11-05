@@ -1,473 +1,546 @@
-# scripts/db.py
-"""
-Camada de banco de dados com SQLAlchemy.
-Define modelos (Company, Process, Delivery) e helpers de upsert.
-"""
+"""Database models and helper functions for the Gestor pipeline."""
 from __future__ import annotations
 
-import os
-import hashlib
-from datetime import datetime
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, Optional
 
-from sqlalchemy import (
-    Column, String, Integer, DateTime, Boolean, Text, ForeignKey,
-    UniqueConstraint, Index, create_engine, event
-)
-from sqlalchemy.orm import declarative_base, relationship, sessionmaker, Session
-from sqlalchemy.engine import Engine
+from dateutil import parser as date_parser
+
 from dotenv import load_dotenv
+from sqlalchemy import (
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    String,
+    UniqueConstraint,
+    create_engine,
+    event,
+    func,
+    select,
+)
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    Session,
+    mapped_column,
+    relationship,
+    sessionmaker,
+)
 
-# Carrega .env
-load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env", override=True)
+from scripts.utils.logger import get_logger
 
-# Base declarativa
-Base = declarative_base()
+ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = ROOT / "data"
+DB_PATH = DATA_DIR / "gestor.db"
 
-# ============================================================================
-# MODELOS
-# ============================================================================
+load_dotenv(dotenv_path=ROOT / ".env", override=True)
 
-class Company(Base):
-    """Representa uma empresa (CNPJ)."""
+LOG = get_logger("db")
+
+
+class Base(DeclarativeBase):
+    """Base declarativa com suporte ao SQLAlchemy 2.0."""
+
+
+class TimestampMixin:
+    """Mixin para carimbos de criação/atualização."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Company(TimestampMixin, Base):
+    """Empresa cadastrada na Acessórias."""
+
     __tablename__ = "companies"
-    
-    id = Column(String, primary_key=True)           # CNPJ somente dígitos
-    nome = Column(String, nullable=False, default="")
-    cnpj = Column(String, nullable=False, default="")
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relacionamentos
-    processes = relationship("Process", back_populates="company")
-    deliveries = relationship("Delivery", back_populates="company")
-    
-    __table_args__ = (
-        Index("ix_companies_cnpj", "cnpj"),
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id_acessorias: Mapped[Optional[int]] = mapped_column(Integer, index=True, unique=True)
+    cnpj: Mapped[str] = mapped_column(String(14), unique=True, index=True)
+    nome: Mapped[str] = mapped_column(String(255))
+    nome_fantasia: Mapped[Optional[str]] = mapped_column(String(255))
+    email: Mapped[Optional[str]] = mapped_column(String(255))
+    telefone: Mapped[Optional[str]] = mapped_column(String(50))
+    cidade: Mapped[Optional[str]] = mapped_column(String(120))
+    uf: Mapped[Optional[str]] = mapped_column(String(2))
+    dados: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON)
+
+    processes: Mapped[list["Process"]] = relationship(
+        back_populates="company", cascade="all, delete-orphan"
+    )
+    deliveries: Mapped[list["Delivery"]] = relationship(
+        back_populates="company", cascade="all, delete-orphan"
     )
 
 
-class Process(Base):
-    """Representa um processo da API Acessórias."""
+class Process(TimestampMixin, Base):
+    """Processo operacional."""
+
     __tablename__ = "processes"
-    
-    proc_id = Column(String, primary_key=True)      # ProcID único da API
-    titulo = Column(String)
-    status = Column(String)                         # "Concluído", "Em andamento", etc.
-    inicio = Column(DateTime)
-    conclusao = Column(DateTime)
-    gestor = Column(String)
-    dias_corridos = Column(Integer)
-    company_id = Column(String, ForeignKey("companies.id"))
-    last_dh = Column(DateTime)                      # DtLastDH da API
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Campos adicionais para armazenar dados completos
-    raw_data = Column(Text)                         # JSON completo do processo
-    
-    # Relacionamento
-    company = relationship("Company", back_populates="processes")
-    
-    __table_args__ = (
-        Index("ix_processes_status", "status"),
-        Index("ix_processes_conclusao", "conclusao"),
-        Index("ix_processes_company", "company_id"),
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id_acessorias: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    empresa_id: Mapped[int] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), index=True
+    )
+    titulo: Mapped[Optional[str]] = mapped_column(String(255))
+    status: Mapped[Optional[str]] = mapped_column(String(60), index=True)
+    departamento: Mapped[Optional[str]] = mapped_column(String(120))
+    dt_inicio: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    dt_prev_conclusao: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    dt_conclusao: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    gestor: Mapped[Optional[str]] = mapped_column(String(120))
+    progresso: Mapped[Optional[float]] = mapped_column(Float)
+    prioridade: Mapped[Optional[str]] = mapped_column(String(60))
+    ultimo_evento: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    raw: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON)
+
+    company: Mapped[Company] = relationship(back_populates="processes")
+    events: Mapped[list["Event"]] = relationship(
+        back_populates="process", cascade="all, delete-orphan"
     )
 
+    __table_args__ = (Index("ix_process_status_empresa", "status", "empresa_id"),)
 
-class Delivery(Base):
-    """Representa uma obrigação/entrega fiscal."""
+
+class Delivery(TimestampMixin, Base):
+    """Obrigação/entrega associada a uma empresa."""
+
     __tablename__ = "deliveries"
-    
-    # Chave primária: hash de company_id + nome + competencia
-    id = Column(String, primary_key=True)
-    company_id = Column(String, ForeignKey("companies.id"))
-    nome = Column(String)                           # Nome da obrigação
-    categoria = Column(String)                      # efd_reinf, efd_contrib, difal, etc.
-    subtipo = Column(String)                        # Para DIFAL: comercializacao/consumo_imobilizado/ambos
-    status = Column(String)                         # Obrigatória/Dispensada/Pendente/etc.
-    competencia = Column(String)                    # "YYYY-MM"
-    prazo = Column(DateTime)
-    entregue_em = Column(DateTime)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Campos adicionais
-    raw_data = Column(Text)                         # JSON completo da delivery
-    
-    # Relacionamento
-    company = relationship("Company", back_populates="deliveries")
-    
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id_acessorias: Mapped[Optional[int]] = mapped_column(Integer, unique=True)
+    empresa_id: Mapped[int] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), index=True
+    )
+    competencia: Mapped[Optional[str]] = mapped_column(String(7), index=True)
+    tipo: Mapped[Optional[str]] = mapped_column(String(120))
+    situacao: Mapped[Optional[str]] = mapped_column(String(120), index=True)
+    dt_evento: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    dt_prazo: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    dt_entrega: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    responsavel: Mapped[Optional[str]] = mapped_column(String(120))
+    payload: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON)
+
+    company: Mapped[Company] = relationship(back_populates="deliveries")
+
     __table_args__ = (
-        UniqueConstraint("company_id", "nome", "competencia", name="uq_delivery_key"),
-        Index("ix_deliveries_cat_comp", "categoria", "competencia"),
-        Index("ix_deliveries_company", "company_id"),
+        UniqueConstraint(
+            "empresa_id", "tipo", "competencia", name="uq_delivery_empresa_tipo_comp"
+        ),
     )
 
 
-# ============================================================================
-# ENGINE E SESSION
-# ============================================================================
+class SyncState(Base):
+    """Controle incremental por endpoint."""
 
-def get_db_url() -> str:
-    """Obtém a URL do banco de dados do .env ou usa padrão."""
-    db_url = os.getenv("DB_URL", "sqlite:///data/econtrole.db")
-    
-    # Se for SQLite relativo, resolve o caminho
-    if db_url.startswith("sqlite:///") and not db_url.startswith("sqlite:////"):
-        # Caminho relativo - resolver a partir da raiz do projeto
-        root = Path(__file__).resolve().parents[1]
-        db_path = db_url.replace("sqlite:///", "")
-        full_path = root / db_path
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-        db_url = f"sqlite:///{full_path}"
-    
-    return db_url
+    __tablename__ = "sync_state"
+
+    endpoint: Mapped[str] = mapped_column(String(120), primary_key=True)
+    last_sync_dh: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_page: Mapped[Optional[int]] = mapped_column(Integer)
+    misc: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
-# Habilitar WAL mode para SQLite (melhor concorrência)
-@event.listens_for(Engine, "connect")
-def set_sqlite_pragma(dbapi_conn, connection_record):
-    """Configura PRAGMA para SQLite."""
-    if "sqlite" in str(dbapi_conn.__class__):
-        cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.close()
+class Event(TimestampMixin, Base):
+    """Eventos derivados dos processos e deliveries para dashboards e KPIs."""
+
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    process_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("processes.id", ondelete="CASCADE"), index=True
+    )
+    empresa_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("companies.id", ondelete="SET NULL"), index=True
+    )
+    delivery_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("deliveries.id", ondelete="SET NULL"), nullable=True
+    )
+    tipo: Mapped[str] = mapped_column(String(120))
+    dt: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON)
+    processo_status: Mapped[Optional[str]] = mapped_column(String(60))
+    referencia: Mapped[Optional[str]] = mapped_column(String(120))
+
+    process: Mapped[Optional[Process]] = relationship(back_populates="events")
+    company: Mapped[Optional[Company]] = relationship()
+    delivery: Mapped[Optional[Delivery]] = relationship()
 
 
-# Engine global
 _engine: Optional[Engine] = None
-_SessionLocal: Optional[sessionmaker] = None
+SessionLocal: Optional[sessionmaker[Session]] = None
+
+
+def _resolve_db_url() -> str:
+    from os import getenv
+
+    db_url = getenv("DB_URL")
+    if db_url:
+        return db_url
+    return f"sqlite:///{DB_PATH}"
+
+
+@event.listens_for(Engine, "connect")
+def _sqlite_pragma(dbapi_connection, connection_record) -> None:  # pragma: no cover
+    """Configurações adicionais para SQLite."""
+    try:
+        if hasattr(dbapi_connection, "execute"):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.close()
+    except Exception as exc:  # pragma: no cover - melhor esforço
+        LOG.warning("Falha ao aplicar PRAGMA SQLite", exc=str(exc))
 
 
 def get_engine() -> Engine:
-    """Retorna o engine do banco de dados (singleton)."""
     global _engine
     if _engine is None:
-        db_url = get_db_url()
-        _engine = create_engine(
-            db_url,
-            echo=False,
-            pool_pre_ping=True,
-            connect_args={"check_same_thread": False} if "sqlite" in db_url else {}
-        )
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        db_url = _resolve_db_url()
+        connect_args = {"check_same_thread": False} if db_url.startswith("sqlite") else {}
+        _engine = create_engine(db_url, future=True, pool_pre_ping=True, connect_args=connect_args)
     return _engine
 
 
-def get_session_local() -> sessionmaker:
-    """Retorna o sessionmaker (singleton)."""
-    global _SessionLocal
-    if _SessionLocal is None:
-        _SessionLocal = sessionmaker(
-            autocommit=False,
-            autoflush=False,
-            bind=get_engine(),
-            expire_on_commit=False  # Evita DetachedInstanceError
-        )
-    return _SessionLocal
+def get_session_factory() -> sessionmaker[Session]:
+    global SessionLocal
+    if SessionLocal is None:
+        SessionLocal = sessionmaker(bind=get_engine(), class_=Session, expire_on_commit=False, future=True)
+    return SessionLocal
 
 
-def init_db():
-    """Inicializa o banco de dados criando todas as tabelas."""
-    engine = get_engine()
-    Base.metadata.create_all(bind=engine)
+def init_db() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    Base.metadata.create_all(get_engine())
+
+
+@contextmanager
+def session_scope() -> Iterable[Session]:
+    """Context manager para lidar com commits/rollback automaticamente."""
+
+    session = get_session_factory()()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 def get_session() -> Session:
-    """Retorna uma nova sessão do banco de dados."""
-    SessionLocal = get_session_local()
-    return SessionLocal()
+    return get_session_factory()()
 
 
-# ============================================================================
-# HELPERS DE UPSERT
-# ============================================================================
+def normalize_cnpj(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    return digits or None
 
-def normalize_cnpj(cnpj: Optional[str]) -> str:
-    """Normaliza CNPJ para apenas dígitos."""
+
+def parse_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    try:
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        parsed = date_parser.parse(str(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _as_int(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _store_raw(entity, payload: Dict[str, Any]) -> None:
+    try:
+        entity.raw = payload  # type: ignore[attr-defined]
+    except Exception:
+        try:
+            entity.payload = payload  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+def upsert_company(session: Session, payload: Dict[str, Any]) -> Company:
+    """Insere ou atualiza uma empresa com base no ID do Acessórias ou CNPJ."""
+
+    id_acessorias = _as_int(
+        payload.get("EmpresaID")
+        or payload.get("EmpID")
+        or payload.get("id_acessorias")
+        or payload.get("id")
+    )
+    cnpj = normalize_cnpj(
+        payload.get("CNPJ")
+        or payload.get("EmpCNPJ")
+        or payload.get("cnpj")
+        or payload.get("Documento")
+    )
     if not cnpj:
-        return ""
-    return "".join(c for c in str(cnpj) if c.isdigit())
+        raise ValueError("CNPJ obrigatório para company")
 
-
-def generate_delivery_id(company_id: str, nome: str, competencia: str) -> str:
-    """Gera ID único para delivery baseado em hash SHA1."""
-    key = f"{company_id}|{nome}|{competencia}"
-    return hashlib.sha1(key.encode("utf-8")).hexdigest()
-
-
-def upsert_company(session: Session, data: Dict[str, Any]) -> Company:
-    """
-    Insere ou atualiza uma empresa.
-    
-    Args:
-        session: Sessão do SQLAlchemy
-        data: Dicionário com dados da empresa (deve conter 'cnpj' ou 'id')
-    
-    Returns:
-        Instância de Company
-    """
-    cnpj = normalize_cnpj(data.get("cnpj") or data.get("CNPJ") or data.get("id"))
-    if not cnpj:
-        raise ValueError("CNPJ não fornecido para upsert_company")
-    
-    company = session.query(Company).filter_by(id=cnpj).first()
-    
-    if company:
-        # Atualizar
-        company.nome = data.get("nome") or data.get("Nome") or company.nome
-        company.cnpj = cnpj
-        company.updated_at = datetime.utcnow()
+    stmt = select(Company)
+    if id_acessorias is not None:
+        stmt = stmt.where(Company.id_acessorias == id_acessorias)
+        company = session.execute(stmt).scalar_one_or_none()
     else:
-        # Inserir
-        company = Company(
-            id=cnpj,
-            nome=data.get("nome") or data.get("Nome") or "",
-            cnpj=cnpj,
-            updated_at=datetime.utcnow()
-        )
+        company = None
+
+    if company is None:
+        company = session.execute(select(Company).where(Company.cnpj == cnpj)).scalar_one_or_none()
+
+    if company is None:
+        company = Company(cnpj=cnpj, nome=str(payload.get("EmpNome") or payload.get("Nome") or ""))
         session.add(company)
-    
+
+    company.id_acessorias = id_acessorias or company.id_acessorias
+    company.nome = str(payload.get("EmpNome") or payload.get("Nome") or company.nome or "").strip()
+    company.nome_fantasia = (
+        payload.get("NomeFantasia")
+        or payload.get("fantasia")
+        or company.nome_fantasia
+    )
+    company.email = payload.get("Email") or payload.get("email") or company.email
+    company.telefone = payload.get("Telefone") or payload.get("telefone") or company.telefone
+    company.cidade = payload.get("Cidade") or payload.get("cidade") or company.cidade
+    company.uf = (payload.get("UF") or payload.get("estado") or company.uf or "").upper()[:2] or None
+    company.dados = payload
+
+    session.flush()
     return company
 
 
-def upsert_process(session: Session, data: Dict[str, Any]) -> Process:
-    """
-    Insere ou atualiza um processo.
-    
-    Args:
-        session: Sessão do SQLAlchemy
-        data: Dicionário com dados do processo (deve conter 'proc_id' ou 'ProcID')
-    
-    Returns:
-        Instância de Process
-    """
-    import json
-    from dateutil import parser as date_parser
-    
-    proc_id = data.get("proc_id") or data.get("ProcID")
-    if not proc_id:
-        raise ValueError("proc_id não fornecido para upsert_process")
-    
-    process = session.query(Process).filter_by(proc_id=proc_id).first()
-    
-    # Parsear datas
-    def parse_date(value):
-        if not value:
-            return None
-        if isinstance(value, datetime):
-            return value
-        try:
-            return date_parser.parse(value)
-        except:
-            return None
-    
-    inicio = parse_date(data.get("inicio") or data.get("ProcInicio"))
-    conclusao = parse_date(data.get("conclusao") or data.get("ProcConclusao"))
-    last_dh = parse_date(data.get("last_dh") or data.get("DtLastDH"))
-    
-    # Company ID
-    company_cnpj = normalize_cnpj(
-        data.get("company_id") or 
-        data.get("cnpj") or 
-        data.get("CNPJ") or 
-        data.get("EmpCNPJ")
-    )
-    
-    if process:
-        # Atualizar
-        process.titulo = data.get("titulo") or data.get("ProcNome") or process.titulo
-        process.status = data.get("status") or data.get("ProcStatus") or process.status
-        process.inicio = inicio or process.inicio
-        process.conclusao = conclusao or process.conclusao
-        process.gestor = data.get("gestor") or data.get("GestorNome") or process.gestor
-        process.dias_corridos = data.get("dias_corridos") or data.get("ProcDiasCorridos") or process.dias_corridos
-        process.company_id = company_cnpj or process.company_id
-        process.last_dh = last_dh or process.last_dh
-        process.raw_data = json.dumps(data, ensure_ascii=False)
-        process.updated_at = datetime.utcnow()
-    else:
-        # Inserir
-        process = Process(
-            proc_id=proc_id,
-            titulo=data.get("titulo") or data.get("ProcNome") or "",
-            status=data.get("status") or data.get("ProcStatus") or "",
-            inicio=inicio,
-            conclusao=conclusao,
-            gestor=data.get("gestor") or data.get("GestorNome") or "",
-            dias_corridos=data.get("dias_corridos") or data.get("ProcDiasCorridos"),
-            company_id=company_cnpj,
-            last_dh=last_dh,
-            raw_data=json.dumps(data, ensure_ascii=False),
-            updated_at=datetime.utcnow()
-        )
+def upsert_process(session: Session, payload: Dict[str, Any]) -> Process:
+    proc_id = _as_int(payload.get("ProcID") or payload.get("proc_id") or payload.get("id"))
+    if proc_id is None:
+        raise ValueError("ProcID obrigatório")
+
+    company = upsert_company(session, payload)
+
+    stmt = select(Process).where(Process.id_acessorias == proc_id)
+    process = session.execute(stmt).scalar_one_or_none()
+
+    if process is None:
+        process = Process(id_acessorias=proc_id, empresa_id=company.id)
         session.add(process)
-    
+
+    process.empresa_id = company.id
+    process.titulo = payload.get("ProcNome") or payload.get("titulo") or process.titulo
+    process.status = payload.get("ProcStatus") or payload.get("status") or process.status
+    process.departamento = (
+        payload.get("ProcDepartamento")
+        or payload.get("Departamento")
+        or process.departamento
+    )
+    process.dt_inicio = parse_datetime(payload.get("ProcInicio") or payload.get("inicio")) or process.dt_inicio
+    process.dt_prev_conclusao = parse_datetime(
+        payload.get("ProcPrevisaoConclusao") or payload.get("dt_prev_conclusao")
+    ) or process.dt_prev_conclusao
+    process.dt_conclusao = parse_datetime(payload.get("ProcConclusao") or payload.get("conclusao")) or process.dt_conclusao
+    process.ultimo_evento = parse_datetime(payload.get("DtLastDH") or payload.get("ultimo_evento")) or process.ultimo_evento
+    process.gestor = payload.get("ProcGestor") or payload.get("GestorNome") or payload.get("gestor") or process.gestor
+    process.progresso = (
+        float(payload.get("ProcProgresso") or payload.get("progresso"))
+        if payload.get("ProcProgresso") or payload.get("progresso")
+        else process.progresso
+    )
+    process.prioridade = payload.get("ProcPrioridade") or payload.get("prioridade") or process.prioridade
+    _store_raw(process, payload)
+
+    session.flush()
     return process
 
 
-def upsert_delivery(session: Session, data: Dict[str, Any]) -> Delivery:
-    """
-    Insere ou atualiza uma delivery (obrigação fiscal).
-    
-    Args:
-        session: Sessão do SQLAlchemy
-        data: Dicionário com dados da delivery
-    
-    Returns:
-        Instância de Delivery ou None se dados inválidos
-    """
-    import json
-    from dateutil import parser as date_parser
-    
-    # Extrair campos chave
-    company_cnpj = normalize_cnpj(
-        data.get("company_id") or 
-        data.get("cnpj") or 
-        data.get("CNPJ") or
-        data.get("Identificador") or ""
+def upsert_delivery(session: Session, payload: Dict[str, Any]) -> Delivery:
+    company = upsert_company(session, payload)
+
+    delivery_id = _as_int(
+        payload.get("DeliveryID")
+        or payload.get("EntID")
+        or payload.get("id_acessorias")
+        or payload.get("id")
     )
-    nome = (data.get("nome") or data.get("Nome") or "").strip()
-    competencia = (data.get("competencia") or data.get("Competencia") or "").strip()
-    
-    # Se não tem competencia, tentar extrair de EntDtPrazo (YYYY-MM-DD -> YYYY-MM)
-    if not competencia:
-        prazo_str = data.get("EntDtPrazo") or data.get("EntDtprazo") or data.get("prazo") or ""
-        if prazo_str and prazo_str != "0000-00-00":
-            try:
-                competencia = prazo_str[:7]  # YYYY-MM
-            except:
-                pass
-    
-    # Se ainda não tem competencia, usar mês atual
-    if not competencia:
-        from datetime import datetime
-        competencia = datetime.utcnow().strftime("%Y-%m")
-    
-    # Validar campos mínimos
-    if not company_cnpj:
-        return None  # Sem CNPJ, não pode persistir
-    
-    if not nome:
-        nome = "Entrega sem nome"  # Valor padrão
-    
-    # Gerar ID com valores seguros
-    try:
-        delivery_id = generate_delivery_id(company_cnpj, nome, competencia)
-    except:
-        return None  # Se falhar ao gerar ID, descartar
-    
-    try:
-        delivery = session.query(Delivery).filter_by(id=delivery_id).first()
-    except:
-        delivery = None
-    
-    # Parsear datas
-    def parse_date(value):
-        if not value:
-            return None
-        if isinstance(value, datetime):
-            return value
-        try:
-            return date_parser.parse(value)
-        except:
-            return None
-    
-    prazo = parse_date(data.get("prazo") or data.get("Prazo"))
-    entregue_em = parse_date(data.get("entregue_em") or data.get("EntregueEm"))
-    
-    # Determinar categoria
-    categoria = data.get("categoria", "")
-    if not categoria:
-        nome_upper = nome.upper()
-        if "REINF" in nome_upper or "EFD-REINF" in nome_upper:
-            categoria = "efd_reinf"
-        elif "EFD CONTRIB" in nome_upper or "EFD-CONTRIB" in nome_upper:
-            categoria = "efd_contrib"
-        elif "DIFAL" in nome_upper:
-            categoria = "difal"
-        else:
-            categoria = "outros"
-    
-    # Determinar subtipo (para DIFAL)
-    subtipo = data.get("subtipo", "")
-    if categoria == "difal" and not subtipo:
-        nome_upper = nome.upper()
-        if "CONSUMO" in nome_upper and "IMOBILIZADO" in nome_upper:
-            subtipo = "ambos"
-        elif "CONSUMO" in nome_upper or "IMOBILIZADO" in nome_upper:
-            subtipo = "consumo_imobilizado"
-        elif "COMERCIALIZAÇÃO" in nome_upper or "COMERCIALIZACAO" in nome_upper:
-            subtipo = "comercializacao"
-    
-    if delivery:
-        # Atualizar
-        delivery.company_id = company_cnpj
-        delivery.nome = nome
-        delivery.categoria = categoria
-        delivery.subtipo = subtipo
-        delivery.status = data.get("status") or data.get("Status") or delivery.status
-        delivery.competencia = competencia
-        delivery.prazo = prazo or delivery.prazo
-        delivery.entregue_em = entregue_em or delivery.entregue_em
-        delivery.raw_data = json.dumps(data, ensure_ascii=False)
-        delivery.updated_at = datetime.utcnow()
+
+    competencia = (payload.get("Competencia") or payload.get("competencia") or "").strip() or None
+    tipo = payload.get("Obrigacao") or payload.get("tipo") or payload.get("Nome")
+
+    stmt = select(Delivery)
+    if delivery_id is not None:
+        stmt = stmt.where(Delivery.id_acessorias == delivery_id)
+        delivery = session.execute(stmt).scalar_one_or_none()
     else:
-        # Inserir
+        delivery = None
+
+    if delivery is None:
+        stmt = select(Delivery).where(
+            Delivery.empresa_id == company.id,
+            Delivery.tipo == tipo,
+            Delivery.competencia == competencia,
+        )
+        delivery = session.execute(stmt).scalar_one_or_none()
+
+    if delivery is None:
         delivery = Delivery(
-            id=delivery_id,
-            company_id=company_cnpj,
-            nome=nome,
-            categoria=categoria,
-            subtipo=subtipo,
-            status=data.get("status") or data.get("Status") or "",
-            competencia=competencia,
-            prazo=prazo,
-            entregue_em=entregue_em,
-            raw_data=json.dumps(data, ensure_ascii=False),
-            updated_at=datetime.utcnow()
+            empresa_id=company.id,
+            id_acessorias=delivery_id,
         )
         session.add(delivery)
-    
+
+    delivery.id_acessorias = delivery_id or delivery.id_acessorias
+    delivery.empresa_id = company.id
+    delivery.tipo = tipo or delivery.tipo
+    delivery.situacao = payload.get("EntStatus") or payload.get("situacao") or payload.get("Status") or delivery.situacao
+    delivery.competencia = competencia or delivery.competencia
+    delivery.dt_evento = parse_datetime(payload.get("EntDtEvento") or payload.get("dt_evento")) or delivery.dt_evento
+    delivery.dt_prazo = parse_datetime(payload.get("EntDtPrazo") or payload.get("prazo")) or delivery.dt_prazo
+    delivery.dt_entrega = parse_datetime(payload.get("EntDtEntrega") or payload.get("entrega")) or delivery.dt_entrega
+    delivery.responsavel = payload.get("Responsavel") or payload.get("responsavel") or delivery.responsavel
+    _store_raw(delivery, payload)
+
+    session.flush()
     return delivery
 
 
-def bulk_upsert_companies(session: Session, companies: List[Dict[str, Any]]) -> int:
-    """Faz upsert em lote de empresas."""
+def upsert_event(
+    session: Session,
+    *,
+    process: Optional[Process],
+    company: Optional[Company],
+    delivery: Optional[Delivery],
+    tipo: str,
+    dt: Optional[datetime],
+    payload: Dict[str, Any],
+    referencia: Optional[str] = None,
+    processo_status: Optional[str] = None,
+) -> Event:
+    event = Event(
+        process=process,
+        company=company,
+        delivery=delivery,
+        tipo=tipo,
+        dt=dt,
+        payload=payload,
+        referencia=referencia,
+        processo_status=processo_status,
+    )
+    session.add(event)
+    session.flush()
+    return event
+
+
+def bulk_upsert_processes(session: Session, rows: Iterable[Dict[str, Any]]) -> int:
     count = 0
-    for company_data in companies:
+    for row in rows:
         try:
-            upsert_company(session, company_data)
+            upsert_process(session, row)
             count += 1
-        except Exception as e:
-            print(f"Erro ao fazer upsert de company: {e}")
-    session.commit()
+        except Exception as exc:
+            LOG.warning("Falha ao upsert process", error=str(exc))
+    session.flush()
     return count
 
 
-def bulk_upsert_processes(session: Session, processes: List[Dict[str, Any]]) -> int:
-    """Faz upsert em lote de processos."""
+def bulk_upsert_deliveries(session: Session, rows: Iterable[Dict[str, Any]]) -> int:
     count = 0
-    for process_data in processes:
+    for row in rows:
         try:
-            upsert_process(session, process_data)
+            upsert_delivery(session, row)
             count += 1
-        except Exception as e:
-            print(f"Erro ao fazer upsert de process: {e}")
-    session.commit()
+        except Exception as exc:
+            LOG.warning("Falha ao upsert delivery", error=str(exc))
+    session.flush()
     return count
 
 
-def bulk_upsert_deliveries(session: Session, deliveries: List[Dict[str, Any]]) -> int:
-    """Faz upsert em lote de deliveries."""
+def bulk_upsert_companies(session: Session, rows: Iterable[Dict[str, Any]]) -> int:
     count = 0
-    for delivery_data in deliveries:
+    for row in rows:
         try:
-            result = upsert_delivery(session, delivery_data)
-            if result:  # Só conta se foi bem-sucedido
-                count += 1
-        except Exception as e:
-            # Log silencioso para não poluir output com erros de validação
-            pass
-    session.commit()
+            upsert_company(session, row)
+            count += 1
+        except Exception as exc:
+            LOG.warning("Falha ao upsert company", error=str(exc))
+    session.flush()
     return count
+
+
+def clear_events(session: Session) -> None:
+    session.query(Event).delete()
+    session.flush()
+
+
+def get_sync_state(session: Session, endpoint: str) -> Optional[SyncState]:
+    return session.get(SyncState, endpoint)
+
+
+def save_sync_state(
+    session: Session,
+    *,
+    endpoint: str,
+    last_sync_dh: Optional[datetime],
+    last_page: Optional[int] = None,
+    misc: Optional[Dict[str, Any]] = None,
+) -> SyncState:
+    state = session.get(SyncState, endpoint)
+    if state is None:
+        state = SyncState(endpoint=endpoint)
+        session.add(state)
+
+    state.last_sync_dh = last_sync_dh
+    state.last_page = last_page
+    state.misc = misc
+    session.flush()
+    return state
+
+
+def reset_sync_state(session: Session, endpoint: Optional[str] = None) -> None:
+    if endpoint:
+        obj = session.get(SyncState, endpoint)
+        if obj:
+            session.delete(obj)
+    else:
+        session.query(SyncState).delete()
+    session.flush()
+
+
+def ensure_database() -> None:
+    try:
+        init_db()
+    except SQLAlchemyError as exc:
+        LOG.error("Erro ao inicializar banco", error=str(exc))
+        raise
+

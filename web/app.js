@@ -32,19 +32,45 @@ async function loadJSON(path, { force = false } = {}) {
 }
 
 // Wrapper para tentar API primeiro, depois fallback para JSON
-async function apiOrJson(pathApi, fallbackJson) {
+async function apiOrJson(pathApi, fallbackJson, options = {}) {
+  const { unwrapItems = false } = options;
   try {
     const r = await fetch(pathApi, { cache: 'no-cache' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
-    // Cachear resultado
-    state.cache[fallbackJson] = data;
-    return data;
+    const payload = unwrapItems && data && typeof data === 'object' && !Array.isArray(data) && 'items' in data
+      ? data.items
+      : data;
+    state.cache[fallbackJson] = payload;
+    return payload;
   } catch (e) {
     console.warn(`API ${pathApi} falhou, usando fallback ${fallbackJson}`, e);
     // Garantir que o fallback seja relativo ao HTML (../data/...)
     const fallbackPath = fallbackJson.startsWith('/') ? fallbackJson.replace(/^\//, '../') : fallbackJson;
-    return await loadJSON(fallbackPath);
+    const fallback = await loadJSON(fallbackPath);
+    if (unwrapItems && fallback && typeof fallback === 'object' && 'items' in fallback) {
+      return fallback.items;
+    }
+    return fallback;
+  }
+}
+
+function updateSourceInfo(meta = {}) {
+  const badgeSource = $('#badgeSource');
+  const badgeSync = $('#badgeSync');
+  if (!badgeSource || !badgeSync) return;
+  const source = ((meta.source || 'db').toString().toUpperCase());
+  badgeSource.textContent = `Fonte: ${source}`;
+  badgeSource.classList.toggle('bg-emerald-100', source === 'DB');
+  badgeSource.classList.toggle('text-emerald-700', source === 'DB');
+  badgeSource.classList.toggle('bg-amber-100', source !== 'DB');
+  badgeSource.classList.toggle('text-amber-700', source !== 'DB');
+  const last = meta.last_sync;
+  if (last) {
+    const dt = new Date(last);
+    badgeSync.textContent = `Atualizado em ${dt.toLocaleString('pt-BR')}`;
+  } else {
+    badgeSync.textContent = 'Atualizado via fallback local';
   }
 }
 
@@ -222,7 +248,7 @@ async function refreshMeta(force = false) {
   try {
     const metaRaw = await loadJSON('../data/meta.json', { force });
     const meta = metaRaw && !Array.isArray(metaRaw) ? metaRaw : {};
-    const stamp = meta?.last_update_utc;
+    const stamp = meta?.last_sync || meta?.last_update_utc;
     if (!stamp) {
       el.textContent = 'Sem informações de atualização';
       return;
@@ -383,23 +409,15 @@ function syncHash(tab, extras = {}) {
 }
 
 /* ----------------------- DASHBOARD ----------------------- */async function renderDashboard() {
-  // Aplicando a lógica de API com fallback para JSON para os 4 cards principais
-  const [reinf, efdc, difal, fechamento] = await Promise.all([
-    apiOrJson('/api/dashboard/reinf', '../data/reinf_competencia.json'),
-    apiOrJson('/api/dashboard/efdcontrib', '../data/efdcontrib_competencia.json'),
-    apiOrJson('/api/dashboard/difal', '../data/difal_tipo.json'),
-    apiOrJson('/api/dashboard/fechamento', '../data/fechamento_stats.json'),
-  ]);
-
-  // Carregando processos e eventos (deliveries) com fallback
-  const proc = await apiOrJson('/api/processos?limite=10000', '../data/processes.json');
-  const events = await apiOrJson('/api/deliveries', '../data/events.json');
-  await apiOrJson('/api/kpis', '../data/kpis.json');
+  const kpiPayload = await apiOrJson('/api/kpis', '../data/kpis.json');
+  updateSourceInfo({ source: kpiPayload?.source, last_sync: kpiPayload?.meta?.last_sync });
+  const proc = await apiOrJson('/api/processes?limit=10000', '../data/processes.json', { unwrapItems: true });
+  const events = await apiOrJson('/api/events?limit=5000', '../data/events.json', { unwrapItems: true });
 
   const hasEvents = Array.isArray(events) && events.length > 0;
   let fallbackTotals = null;
   if (!hasEvents) {
-    const companiesData = await loadJSON('../data/companies_obligations.json');
+    const companiesData = await loadJSON('../data/companies.json');
     fallbackTotals = summarizeCompanyTotals(companiesData);
   }
 
@@ -407,7 +425,7 @@ function syncHash(tab, extras = {}) {
   if (cards) cards.innerHTML = '';
   const fallbackMessage = !hasEvents
     ? fallbackTotals
-      ? 'Sem eventos consolidados. Mostrando totais agregados a partir de companies_obligations.json.'
+      ? 'Sem eventos consolidados. Mostrando totais agregados a partir de companies.json.'
       : 'Sem eventos consolidados no período atual. Execute a coleta e tente novamente.'
     : '';
   setEmptyState('#empty-dashboard', !hasEvents, fallbackMessage);
@@ -416,11 +434,35 @@ function syncHash(tab, extras = {}) {
   const ym = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
   const finalizadosMes = (proc || []).filter((p) => (p.conclusao || '').startsWith(ym)).length;
 
-  const lt = (proc || [])
-    .filter((p) => p.status === 'Concluído')
-    .sort((a, b) => compareValues(b.conclusao, a.conclusao))
-    .slice(0, 5);categoria && (!status || e.status === status) && (e.competencia || '').startsWith(ym),
-    ).length;
+  const leadTimes = (proc || [])
+    .map((p) => {
+      const start = parseDate(p.inicio);
+      const end = parseDate(p.conclusao);
+      if (!start || !end) return null;
+      return daysDiff(start, end);
+    })
+    .filter((n) => Number.isFinite(n) && n >= 0);
+
+  const avg = leadTimes.length
+    ? Math.round(leadTimes.reduce((sum, value) => sum + value, 0) / leadTimes.length)
+    : null;
+  const med = leadTimes.length
+    ? (() => {
+        const sorted = [...leadTimes].sort((a, b) => a - b);
+        return sorted[Math.floor(sorted.length / 2)];
+      })()
+    : null;
+
+  const countBy = (categoria, status) =>
+    (events || []).filter((e) => {
+      if (categoria && e.categoria !== categoria) return false;
+      if (status && e.status !== status) return false;
+      const comp = e.competencia || '';
+      return comp.startsWith(ym);
+    }).length;
+
+  const avgLabel = Number.isFinite(avg) ? avg : '—';
+  const medLabel = Number.isFinite(med) ? med : '—';
 
   const card = (title, value, note = '') => `
     <div class="panel">
@@ -436,8 +478,8 @@ function syncHash(tab, extras = {}) {
   const efdDisp = countBy('efd_contrib', 'Dispensada');
 
   cards?.insertAdjacentHTML('beforeend', card('Finalizados (mês)', finalizadosMes));
-  cards?.insertAdjacentHTML('beforeend', card('Lead time médio (dias)', avg || '—'));
-  cards?.insertAdjacentHTML('beforeend', card('Lead time mediano (dias)', med || '—'));
+  cards?.insertAdjacentHTML('beforeend', card('Lead time médio (dias)', avgLabel));
+  cards?.insertAdjacentHTML('beforeend', card('Lead time mediano (dias)', medLabel));
   cards?.insertAdjacentHTML(
     'beforeend',
     card('REINF (obrigatórias/dispensadas no mês)', `${reinfOb} / ${reinfDisp}`),
@@ -468,7 +510,7 @@ function syncHash(tab, extras = {}) {
       'beforeend',
       `
         <div class="panel">
-          <div class="text-sm text-slate-500 mb-2">Resumo de obrigações (companies_obligations.json)</div>
+          <div class="text-sm text-slate-500 mb-2">Resumo de obrigações (companies.json)</div>
           <div class="summary-grid">${grid}</div>
         </div>
       `,
@@ -570,11 +612,11 @@ function syncHash(tab, extras = {}) {
 /* ----------------------- OBRIGAÇÕES (EVENTOS) ----------------------- */
 async function renderObrigacoes() {
   // Usar o endpoint /api/deliveries (que deve retornar o mesmo shape de events.json)
-  const events = await apiOrJson('/api/deliveries', '../data/events.json');
+  const events = await apiOrJson('/api/events?limit=5000', '../data/events.json', { unwrapItems: true });
   const hasEvents = Array.isArray(events) && events.length > 0;
   let emptyContent = 'Sem dados de obrigações no momento. Execute a coleta ou ajuste os filtros.';
   if (!hasEvents) {
-    const companiesData = await loadJSON('../data/companies_obligations.json');
+    const companiesData = await loadJSON('../data/companies.json');
     const totals = summarizeCompanyTotals(companiesData);
     if (totals) {
       const labels = [
@@ -594,7 +636,7 @@ async function renderObrigacoes() {
         )
         .join('');
       emptyContent = `
-        <p class="mb-3">Sem eventos de obrigações carregados. Mostrando totais agregados (companies_obligations.json).</p>
+        <p class="mb-3">Sem eventos de obrigações carregados. Mostrando totais agregados (companies.json).</p>
         <div class="summary-grid">${grid}</div>
       `;
     }
@@ -854,7 +896,7 @@ async function renderObrigacoes() {
 /* ----------------------- PROCESSOS ----------------------- */
 async function renderProcessos() {
   // Usar o endpoint /api/processos para a lista de processos com fallback para processes.json
-  const proc = await apiOrJson('/api/processos?limite=10000', '../data/processes.json');
+  const proc = await apiOrJson('/api/processes?limit=10000', '../data/processes.json', { unwrapItems: true });
   const tab = 'processos';
   const uniq = (arr) => [...new Set(arr.filter(Boolean))].sort((a, b) => compareValues(a, b));
 
@@ -1210,11 +1252,13 @@ async function renderAlertas() {
 /* ----------------------- EMPRESAS ----------------------- */
 async function renderEmpresas() {
   // Usar os endpoints corretos para as abas
-  const events = await apiOrJson('/api/deliveries', '../data/events.json');
-  const proc = await apiOrJson('/api/processos?limite=10000', '../data/processes.json');
+  const events = await apiOrJson('/api/events?limit=5000', '../data/events.json', { unwrapItems: true });
+  const proc = await apiOrJson('/api/processes?limit=10000', '../data/processes.json', { unwrapItems: true });
   const box = $('#cards-empresas');
   const q = $('#q-emp');
   if (!box || !q) return;
+  const fallbackNoteId = 'companiesFallbackNote';
+  document.getElementById(fallbackNoteId)?.remove();
 
   const byEmp = {};
   events.forEach((e) => {
@@ -1227,8 +1271,9 @@ async function renderEmpresas() {
   });
 
   let companies = Object.values(byEmp).sort((a, b) => compareValues(a.empresa || '', b.empresa || ''));
+  let usingFallbackCompanies = false;
   if (!companies.length) {
-    const companiesFallback = await loadJSON('../data/companies_obligations.json');
+    const companiesFallback = await loadJSON('../data/companies.json');
     if (Array.isArray(companiesFallback) && companiesFallback.length) {
       companies = companiesFallback.map((item) => ({
         empresa: item?.empresa || item?.raw?.RazaoSocial || '(Sem nome)',
@@ -1237,6 +1282,7 @@ async function renderEmpresas() {
         procs: [],
         counters: item?.counters || {},
       }));
+      usingFallbackCompanies = true;
     }
   }
 
@@ -1248,6 +1294,15 @@ async function renderEmpresas() {
   if (!companies.length) {
     box.innerHTML = '';
     return;
+  }
+
+  if (usingFallbackCompanies && box.parentElement) {
+    const note = document.createElement('p');
+    note.id = fallbackNoteId;
+    note.className = 'text-xs text-amber-600 mb-3';
+    note.textContent =
+      'Dados limitados: exibindo agregados do fallback companies.json. Execute a coleta completa para habilitar timelines e métricas detalhadas.';
+    box.parentElement.insertBefore(note, box);
   }
 
   const computeKpi = (c) => {
@@ -1494,21 +1549,24 @@ async function applyFromHash() {
 async function carregarTudo() {
   console.log('Carregando dados...');
   try {
-    const [kpis, alerts, reinf, efdcontrib, difal, fechamento, events] = await Promise.all([
+    const [snapshot, events] = await Promise.all([
       apiOrJson('/api/kpis', '../data/kpis.json'),
-      apiOrJson('/api/alerts', '../data/alerts.json'),
-      apiOrJson('/api/dashboard/reinf', '../data/reinf_competencia.json'),
-      apiOrJson('/api/dashboard/efdcontrib', '../data/efdcontrib_competencia.json'),
-      apiOrJson('/api/dashboard/difal', '../data/difal_tipo.json'),
-      apiOrJson('/api/dashboard/fechamento', '../data/fechamento_stats.json'),
-      apiOrJson('/api/processes', '../data/events.json')
+      apiOrJson('/api/events?limit=5000', '../data/events.json', { unwrapItems: true }),
     ]);
-    
-    renderDashboard(reinf, efdcontrib, difal, fechamento);
-    renderObrigacoes(events);
-    renderProcessos(events);
-    renderAlertas(alerts);
-    
+
+    state.cache['../data/kpis.json'] = snapshot;
+    state.cache['../data/alerts.json'] = snapshot?.alerts || [];
+    state.cache['../data/reinf_competencia.json'] = snapshot?.reinf || {};
+    state.cache['../data/efdcontrib_competencia.json'] = snapshot?.efd || {};
+    state.cache['../data/difal_tipo.json'] = snapshot?.difal || {};
+    state.cache['../data/fechamento_stats.json'] = snapshot?.kpis?.fechamento || {};
+    state.cache['../data/events.json'] = events;
+
+    await renderDashboard();
+    await renderObrigacoes();
+    await renderProcessos();
+    await renderAlertas();
+
     console.log('Dados carregados com sucesso!');
   } catch (e) {
     console.error('Erro ao carregar dados:', e);

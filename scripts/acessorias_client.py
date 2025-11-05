@@ -1,531 +1,374 @@
-# scripts/acessorias_client.py
-"""Unified HTTP client for the Acessórias API."""
+"""HTTP client for the Acessórias API with resilience helpers."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional
+from dataclasses import dataclass, field
+from datetime import datetime
 import os
-import time
 import random
-import logging
-from datetime import datetime, timedelta
+import time
+from typing import Any, Dict, Iterable, List, Optional
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-from scripts.utils.logger import log
-from scripts.utils import normalization
+from scripts.utils.logger import get_logger, log
 
-LOG = logging.getLogger("acessorias_client")
-
-_MAX_RETRIES = 7
+LOG = get_logger("acessorias")
 
 
-def _clean_cnpj(value: Optional[str]) -> Optional[str]:
-    if not value:
-        return value
-    digits = "".join(ch for ch in value if ch.isdigit())
-    return digits or value
+def _normalize_cnpj(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    return digits or None
+
+
+def _ensure_list(value: Optional[Iterable[str] | str]) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(item) for item in value]
+
+
+def _coerce_datetime(dt: Optional[datetime | str]) -> Optional[str]:
+    if dt is None:
+        return None
+    if isinstance(dt, datetime):
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    text = str(dt).strip()
+    if len(text) == 10:
+        return f"{text} 00:00:00"
+    return text
 
 
 @dataclass
 class AcessoriasClient:
-    base_url: str | None = None
-    rate_budget: int = 90
+    """Pequeno wrapper sobre requests para lidar com rate-limit/backoff."""
 
-    def __post_init__(self):
-        token = os.getenv("ACESSORIAS_TOKEN")
+    base_url: Optional[str] = None
+    rate_budget: int = 90
+    connect_timeout: float = 10.0
+    read_timeout: float = 30.0
+    session: requests.Session = field(init=False)
+    sleep_seconds: float = field(init=False)
+
+    def __post_init__(self) -> None:
+        token = (os.getenv("ACESSORIAS_TOKEN") or "").strip()
         if not token:
             raise RuntimeError("ACESSORIAS_TOKEN não definido no .env")
-        # garante barra final
-        self.base_url = (
-            (self.base_url or os.getenv("ACESSORIAS_BASE_URL") or "https://api.acessorias.com")
-            .rstrip("/")
-            + "/"
-        )
-        self.session = requests.Session()
-        # HEADERS CANÔNICOS
-        self.session.headers.update({
-            "Authorization": f"Bearer {token.strip()}",
-            "Accept": "application/json",
-            "User-Agent": "gestor-neto-contabilidade/1.0",
-        })
-        # rate limit (mínimo 0.2s entre chamadas)
-        # Usa ACESSORIAS_RATE_BUDGET do .env se disponível
+
+        base_env = os.getenv("ACESSORIAS_BASE_URL") or "https://api.acessorias.com"
+        self.base_url = (self.base_url or base_env).rstrip("/") + "/"
+
         budget_env = os.getenv("ACESSORIAS_RATE_BUDGET")
         if budget_env:
             try:
-                self.rate_budget = int(budget_env)
+                self.rate_budget = max(1, int(budget_env))
             except ValueError:
                 pass
-        budget = self.rate_budget if self.rate_budget else 1
-        self.sleep_seconds = max(0.2, 60.0 / float(budget))
+
+        self.sleep_seconds = max(0.2, 60.0 / float(self.rate_budget or 60))
+
+        connect_env = os.getenv("ACESSORIAS_CONNECT_TIMEOUT")
+        read_env = os.getenv("ACESSORIAS_READ_TIMEOUT")
+        if connect_env:
+            try:
+                self.connect_timeout = float(connect_env)
+            except ValueError:
+                pass
+        if read_env:
+            try:
+                self.read_timeout = float(read_env)
+            except ValueError:
+                pass
+
+        retry_strategy = Retry(
+            total=3,
+            connect=3,
+            read=0,
+            status=0,
+            backoff_factor=0,
+            allowed_methods=None,
+            raise_on_status=False,
+        )
+
+        self.session = requests.Session()
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
+        self.session.headers.update(
+            {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+                "User-Agent": "gestor-neto-contabilidade/1.0",
+            }
+        )
 
     # ------------------------------------------------------------------
     def _request(
         self,
+        method: str,
         path: str,
-        params: dict | None = None,
-        method: str = "GET",
-        retries: int = _MAX_RETRIES,
-        timeout: int = 30,
+        params: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        """Request robusto com backoff, tratamento de erros e diagnóstico.
+        url = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
+        timeout = (self.connect_timeout, self.read_timeout)
+        attempt = 0
+        last_error: Optional[str] = None
 
-        Observação: usa os headers da sessão HTTP configurada em __post_init__.
-        """
-        url = (self.base_url.rstrip("/") + "/" + path.lstrip("/"))
-        last_status = None
-        last_text = None
-        last_exc = None
-
-        for attempt in range(1, retries + 1):
+        while attempt < 7:
+            attempt += 1
             try:
                 if method.upper() == "GET":
-                    r = self.session.get(url, params=params, timeout=timeout)
+                    response = self.session.get(url, params=params, timeout=timeout)
                 else:
-                    r = self.session.post(url, json=params, timeout=timeout)
+                    response = self.session.post(url, json=params, timeout=timeout)
 
-                last_status = r.status_code
-                ct = (r.headers.get("Content-Type") or "")
-                body_excerpt = r.text[:400] if r.text else ""
-                last_text = body_excerpt
-
+                status = response.status_code
+                body_excerpt = (response.text or "")[:400]
                 log(
                     "acessorias_client",
                     "DEBUG",
                     "http_response",
                     url=url,
-                    status=r.status_code,
-                    body_excerpt=body_excerpt,
+                    status=status,
+                    params=params,
                 )
 
-                # Sucesso direto
-                if 200 <= r.status_code < 300:
-                    if r.status_code == 204:
-                        log(
-                            "acessorias_client",
-                            "INFO",
-                            "http_no_content",
-                            url=url,
-                            params=params,
-                        )
+                if 200 <= status < 300:
+                    if not response.content:
                         return []
-                    if "application/json" in ct.lower():
-                        return r.json()
-                    # se não vier JSON, tenta mesmo assim
                     try:
-                        return r.json()
-                    except Exception:
-                        return {"raw": body_excerpt}
+                        return response.json()
+                    except ValueError:
+                        return response.text
 
-                # Tratamentos específicos
-                if r.status_code in (401, 403):
-                    raise RuntimeError(
-                        f"HTTP {r.status_code} (auth). Verifique ACESSORIAS_TOKEN."
-                    )
-                if r.status_code == 404:
-                    raise RuntimeError(
-                        f"HTTP 404. Rota não encontrada: {url}"
-                    )
-                if r.status_code == 429:
-                    retry_after = r.headers.get("Retry-After")
-                    wait: float
+                if status in (401, 403):
+                    raise RuntimeError("Token inválido ou sem permissão na API da Acessórias")
+
+                if status == 404:
+                    raise RuntimeError(f"Endpoint não encontrado: {url}")
+
+                if status == 429:
+                    retry_after = response.headers.get("Retry-After")
                     if retry_after:
                         try:
                             wait = float(retry_after)
-                        except (TypeError, ValueError):
-                            wait = 2 ** attempt + random.uniform(0, 1.0)
+                        except ValueError:
+                            wait = 2 ** attempt + random.uniform(0, 0.5)
                     else:
-                        wait = 2 ** attempt + random.uniform(0, 1.0)
-                    log(
-                        "acessorias_client",
-                        "WARNING",
-                        "http_rate_limited",
-                        url=url,
-                        status=r.status_code,
-                        retry_after=retry_after,
-                    )
+                        wait = 2 ** attempt + random.uniform(0, 0.5)
                     LOG.warning(
-                        "429 rate limit. Aguardando %.1fs (tentativa %d/%d) - %s",
+                        "429 recebido. Aguardando %.1fs (tentativa %d/7)",
                         wait,
                         attempt,
-                        retries,
-                        url,
                     )
                     time.sleep(wait)
                     continue
 
-                # 5xx -> backoff exponencial
-                if 500 <= r.status_code < 600:
-                    wait = 2 ** attempt + random.uniform(0, 1.0)
-                    log(
-                        "acessorias_client",
-                        "ERROR",
-                        "http_server_error",
-                        url=url,
-                        status=r.status_code,
-                        body_excerpt=body_excerpt,
-                    )
-                    LOG.error(
-                        "API retornou %s. Retry em %.1fs (tentativa %d/%d). Resp: %s",
-                        r.status_code,
+                if 500 <= status < 600:
+                    wait = 2 ** attempt + random.uniform(0, 0.5)
+                    LOG.warning(
+                        "API respondeu %s. Nova tentativa em %.1fs (tentativa %d/7)",
+                        status,
                         wait,
                         attempt,
-                        retries,
-                        body_excerpt,
                     )
                     time.sleep(wait)
                     continue
 
-                # Demais erros
-                raise RuntimeError(
-                    f"HTTP {r.status_code}. URL={url}. Body[:400]={body_excerpt!r}"
-                )
+                last_error = f"HTTP {status}: {body_excerpt}"
+                break
 
-            except requests.RequestException as e:
-                last_exc = e
-                wait = 2 ** attempt + random.uniform(0, 1.0)
+            except requests.RequestException as exc:
+                last_error = str(exc)
+                wait = 2 ** attempt + random.uniform(0, 0.5)
                 LOG.warning(
-                    "Exceção de rede (%s). Retry em %.1fs (tentativa %d/%d) - %s",
-                    e.__class__.__name__,
+                    "Erro de rede %s. Retry em %.1fs (tentativa %d/7)",
+                    exc.__class__.__name__,
                     wait,
                     attempt,
-                    retries,
-                    url,
                 )
                 time.sleep(wait)
-                continue
 
-        # esgotou tentativas
-        details = f"status={last_status}, body[:200]={repr((last_text or '')[:200])}, url={url}"
-        if last_exc:
-            details += f", err={last_exc.__class__.__name__}: {last_exc}"
-        raise RuntimeError(f"Falha ao contactar API após múltiplas tentativas | {details}")
-
-    # ------------------------------------------------------------------
-    def _normalize_records(self, payload: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        normalized: List[Dict[str, Any]] = []
-        for raw in payload:
-            if not isinstance(raw, dict):
-                continue
-            data = normalization.normalize_structure(raw)
-            for key in list(data.keys()):
-                if key.lower() in {"cnpj", "cnpjcpf", "cnpj_cpf"}:
-                    data[key] = _clean_cnpj(str(data[key]))
-            normalized.append(data)
-        return normalized
+        raise RuntimeError(f"Falha ao contactar API após múltiplas tentativas | {last_error}")
 
     # ------------------------------------------------------------------
     def list_processes(
         self,
-        statuses: Optional[Iterable[str]] = None,
-        dt_last_dh: Optional[str] = None,
-        include_steps: bool = False,
+        *,
+        status: Optional[Iterable[str] | str] = None,
+        page: int = 1,
+        per_page: int = 100,
+        dt_last_dh: Optional[datetime | str] = None,
         filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        """Lista processos com suporte aos filtros documentados."""
+        statuses = _ensure_list(status) or [None]
+        dt_param = _coerce_datetime(dt_last_dh)
 
-        status_values = [s for s in (statuses or []) if s]
-        if not status_values:
-            status_values = [None]
-
-        filters = dict(filters or {})
-        allowed_filter_keys = {
+        allowed_filters = {
             "ProcNome",
             "ProcInicioIni",
             "ProcInicioFim",
             "ProcConclusaoIni",
             "ProcConclusaoFim",
-            "DtLastDH",
         }
 
-        if dt_last_dh:
-            filters["DtLastDH"] = dt_last_dh
-
-        request_filters = {
-            key: value
-            for key, value in filters.items()
-            if key in allowed_filter_keys and value not in (None, "")
-        }
+        filters = filters or {}
+        safe_filters = {k: v for k, v in filters.items() if k in allowed_filters and v}
+        if dt_param:
+            safe_filters["DtLastDH"] = dt_param
 
         results: List[Dict[str, Any]] = []
-        path = "processes/ListAll*" if include_steps else "processes/ListAll"
-
-        for status in status_values:
-            page = 1
+        for status_value in statuses:
+            current_page = page
             while True:
-                params: Dict[str, Any] = {"Pagina": page, **request_filters}
-                if status:
-                    params["ProcStatus"] = status
+                params = {"Pagina": current_page, "Registros": per_page, **safe_filters}
+                if status_value:
+                    params["ProcStatus"] = status_value
 
-                payload = self._request(path, params)
-
-                if payload is None:
-                    raise RuntimeError("Rota /processes não retornou dados")
-
+                payload = self._request("GET", "processes/ListAll", params)
                 if not payload:
-                    if page == 1:
-                        safe_filters = {
-                            key: str(value)
-                            for key, value in request_filters.items()
-                        }
+                    if current_page == page:
                         log(
                             "acessorias_client",
                             "INFO",
                             "processes_empty",
-                            status=status or "ALL",
-                            filters=safe_filters,
+                            status=status_value or "ALL",
+                            filters=params,
                         )
                     break
 
                 if isinstance(payload, dict) and "items" in payload:
-                    page_records = list(payload.get("items") or [])
+                    page_items = list(payload.get("items") or [])
                 elif isinstance(payload, dict):
-                    page_records = [payload]
+                    page_items = [payload]
                 else:
-                    page_records = list(payload)
+                    page_items = list(payload)
 
-                normalized = self._normalize_records(page_records)
-                results.extend(normalized)
+                if not page_items:
+                    break
 
+                results.extend(self._normalize_records(page_items))
                 log(
                     "acessorias_client",
                     "DEBUG",
                     "processes_page",
-                    status=status or "ALL",
-                    page=page,
-                    count=len(normalized),
-                    include_steps=include_steps,
-                    filters={key: str(value) for key, value in request_filters.items()},
+                    status=status_value or "ALL",
+                    page=current_page,
+                    count=len(page_items),
                 )
 
-                page += 1
-                time.sleep(self.sleep_seconds)
-        return results
+                if len(page_items) < per_page:
+                    break
 
-    # ------------------------------------------------------------------
-    def get_process(self, proc_id: str) -> Dict[str, Any]:
-        variants = [
-            f"processes/{proc_id}",
-            f"processes/{proc_id}*",
-            f"processes/{proc_id}/",
-            f"processes/{proc_id}*/",
-        ]
-        for path in variants:
-            data = self._request(path, None)
-            if data is None:
-                continue
-            if isinstance(data, list):
-                if data:
-                    record = data[0]
-                    return self._normalize_records([record])[0]
-                return {}
-            if isinstance(data, dict):
-                normalized = self._normalize_records([data])
-                return normalized[0] if normalized else {}
-        raise RuntimeError(f"Processo {proc_id} não encontrado na rota /processes")
+                current_page += 1
+                time.sleep(self.sleep_seconds)
+
+        return results
 
     # ------------------------------------------------------------------
     def list_deliveries(
         self,
-        identificador: str,
-        dt_initial: str,
-        dt_final: str,
-        dt_last_dh: Optional[str] = None,
-        include_config: bool = True,
-    ) -> List[Dict[str, Any]]:
-        if identificador == "ListAll":
-            if not dt_last_dh:
-                log("acessorias_client", "ERROR", "ListAll exige DtLastDH")
-                raise ValueError("DtLastDH é obrigatório quando Identificador=ListAll")
-            try:
-                normalized_last = dt_last_dh.replace("Z", "+00:00")
-                dt = datetime.fromisoformat(normalized_last)
-            except ValueError as exc:
-                raise ValueError("DtLastDH deve estar no formato ISO YYYY-MM-DD HH:MM:SS") from exc
-            today = datetime.now()
-            if dt.tzinfo:
-                today = datetime.now(tz=dt.tzinfo)
-            if dt.date() < (today - timedelta(days=1)).date() or dt.date() > today.date():
-                raise ValueError(
-                    "DtLastDH para ListAll deve ser do dia atual ou anterior"
-                )
-
-        results: List[Dict[str, Any]] = []
-        page = 1
-        while True:
-            params: Dict[str, Any] = {
-                "Pagina": page,
-                "DtInitial": dt_initial,
-                "DtFinal": dt_final,
-            }
-            if dt_last_dh:
-                params["DtLastDH"] = dt_last_dh
-            if include_config:
-                params["config"] = ""
-
-            payload = self._request(f"deliveries/{identificador}/", params)
-            if payload is None:
-                raise RuntimeError("Endpoint deliveries não disponível")
-            if not payload:
-                break
-
-            if isinstance(payload, dict):
-                page_records = [payload]
-            else:
-                page_records = list(payload)
-
-            normalized = self._normalize_records(page_records)
-            for record in normalized:
-                for key in list(record.keys()):
-                    if key.lower().startswith("entdt"):
-                        value = record[key]
-                        if isinstance(value, str):
-                            record[key] = normalization.normalize_string(value)
-
-            results.extend(normalized)
-            log(
-                "acessorias_client",
-                "DEBUG",
-                "deliveries_page",
-                identificador=identificador,
-                page=page,
-                count=len(normalized),
-            )
-            page += 1
-            time.sleep(self.sleep_seconds)
-        return results
-
-    # ------------------------------------------------------------------
-    def list_deliveries_listall(
-        self,
-        dt_initial: str,
-        dt_final: str,
-        dt_last_dh: str,
+        *,
+        identificador: str = "ListAll",
         page: int = 1,
+        per_page: int = 100,
+        dt_last_dh: Optional[datetime | str] = None,
+        dt_initial: Optional[str] = None,
+        dt_final: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Busca deliveries via ListAll (delta hoje/ontem).
-        DtLastDH é obrigatório neste endpoint.
-        """
-        if not dt_last_dh:
-            raise ValueError("DtLastDH é obrigatório para list_deliveries_listall")
-        
-        results: List[Dict[str, Any]] = []
-        current_page = page
-        
-        while True:
-            params: Dict[str, Any] = {
-                "Pagina": current_page,
-                "DtInitial": dt_initial,
-                "DtFinal": dt_final,
-                "DtLastDH": dt_last_dh,
-            }
-            
-            payload = self._request("deliveries/ListAll", params)
-            if payload is None or not payload:
-                break
-            
-            if isinstance(payload, dict):
-                page_records = [payload]
-            else:
-                page_records = list(payload)
-            
-            normalized = self._normalize_records(page_records)
-            results.extend(normalized)
-            
-            log(
-                "acessorias_client",
-                "DEBUG",
-                "deliveries_listall_page",
-                page=current_page,
-                count=len(normalized),
-            )
-            
-            current_page += 1
-            time.sleep(self.sleep_seconds)
-        
-        return results
+        params: Dict[str, Any] = {"Pagina": page, "Registros": per_page}
+        if dt_initial:
+            params["DtInitial"] = dt_initial
+        if dt_final:
+            params["DtFinal"] = dt_final
+        if dt_last_dh:
+            params["DtLastDH"] = _coerce_datetime(dt_last_dh)
+        params["config"] = ""
+
+        payload = self._request("GET", f"deliveries/{identificador}/", params)
+        if not payload:
+            return []
+
+        if isinstance(payload, dict) and "items" in payload:
+            items = list(payload.get("items") or [])
+        elif isinstance(payload, dict):
+            items = [payload]
+        else:
+            items = list(payload)
+
+        return self._normalize_records(items)
 
     # ------------------------------------------------------------------
-    def list_deliveries_by_cnpj(
+    def deliveries_by_cnpj(
         self,
+        *,
         cnpj: str,
-        dt_initial: str,
-        dt_final: str,
         page: int = 1,
+        per_page: int = 100,
+        dt_initial: Optional[str] = None,
+        dt_final: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Busca deliveries por CNPJ (histórico).
-        Não usa DtLastDH.
-        """
-        cnpj_clean = _clean_cnpj(cnpj)
-        if not cnpj_clean:
-            raise ValueError("CNPJ inválido para list_deliveries_by_cnpj")
-        
-        results: List[Dict[str, Any]] = []
-        current_page = page
-        
-        while True:
-            params: Dict[str, Any] = {
-                "Pagina": current_page,
-                "DtInitial": dt_initial,
-                "DtFinal": dt_final,
-            }
-            
-            payload = self._request(f"deliveries/{cnpj_clean}", params)
-            if payload is None or not payload:
-                break
-            
-            if isinstance(payload, dict):
-                page_records = [payload]
-            else:
-                page_records = list(payload)
-            
-            normalized = self._normalize_records(page_records)
-            results.extend(normalized)
-            
-            log(
-                "acessorias_client",
-                "DEBUG",
-                "deliveries_by_cnpj_page",
-                cnpj=cnpj_clean,
-                page=current_page,
-                count=len(normalized),
-            )
-            
-            current_page += 1
-            time.sleep(self.sleep_seconds)
-        
-        return results
+        cleaned = _normalize_cnpj(cnpj)
+        if not cleaned:
+            raise ValueError("CNPJ inválido para deliveries_by_cnpj")
+
+        params: Dict[str, Any] = {"Pagina": page, "Registros": per_page}
+        if dt_initial:
+            params["DtInitial"] = dt_initial
+        if dt_final:
+            params["DtFinal"] = dt_final
+
+        payload = self._request("GET", f"deliveries/{cleaned}", params)
+        if not payload:
+            return []
+
+        if isinstance(payload, dict) and "items" in payload:
+            items = list(payload.get("items") or [])
+        elif isinstance(payload, dict):
+            items = [payload]
+        else:
+            items = list(payload)
+
+        return self._normalize_records(items)
 
     # ------------------------------------------------------------------
     def list_companies_obligations(
         self,
+        *,
         identificador: str = "ListAll",
+        page: int = 1,
+        per_page: int = 100,
     ) -> List[Dict[str, Any]]:
-        results: List[Dict[str, Any]] = []
-        page = 1
-        while True:
-            params: Dict[str, Any] = {
-                "Pagina": page,
-                "obligations": "",
-            }
+        params = {"Pagina": page, "Registros": per_page, "obligations": ""}
+        payload = self._request("GET", f"companies/{identificador}/", params)
+        if not payload:
+            return []
 
-            payload = self._request(f"companies/{identificador}/", params)
-            if payload is None:
-                payload = self._request(f"companies/{identificador}", params)
-                if payload is None:
-                    raise RuntimeError("Endpoint companies não disponível")
-            if not payload:
-                break
+        if isinstance(payload, dict) and "items" in payload:
+            items = list(payload.get("items") or [])
+        elif isinstance(payload, dict):
+            items = [payload]
+        else:
+            items = list(payload)
 
-            if isinstance(payload, dict):
-                page_records = [payload]
-            else:
-                page_records = list(payload)
+        return self._normalize_records(items)
 
-            results.extend(self._normalize_records(page_records))
-            page += 1
-            time.sleep(self.sleep_seconds)
-        return results
+    # ------------------------------------------------------------------
+    def _normalize_records(self, payload: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for record in payload:
+            if not isinstance(record, dict):
+                continue
+            entry = {k: v for k, v in record.items()}
+            for key, value in list(entry.items()):
+                if key.lower() in {"cnpj", "cnpjcpf", "cnpj_cpf", "emp_cnpj"}:
+                    entry[key] = _normalize_cnpj(str(value))
+                elif isinstance(value, str):
+                    entry[key] = value.strip()
+            normalized.append(entry)
+        return normalized
+
