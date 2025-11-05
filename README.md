@@ -51,7 +51,7 @@ Sistema completo para mapear, padronizar e monitorar procedimentos contábeis de
      
      # Token da API Acessórias
      ACESSORIAS_TOKEN="SEU_TOKEN_AQUI"
-     ACESSORIAS_BASE_URL="https://api.acessorias.com"
+     ACESSORIAS_API_BASE="https://api.acessorias.com"
      ```
    - **IMPORTANTE:** Substitua `"SEU_TOKEN_AQUI"` pelo seu token real.
 
@@ -74,6 +74,8 @@ Sistema completo para mapear, padronizar e monitorar procedimentos contábeis de
 6. **Iniciar o servidor (Backend):**
    ```bash
    npm run dev
+   # ou, se preferir uma alternativa compatível com Windows:
+   npm run dev:tsx
    ```
    *O servidor iniciará em `http://localhost:3000`.*
 
@@ -96,6 +98,28 @@ Para validar as correções de sincronização:
 - **✅ Frontend** exibe listas/dash atualizados após clicar "Atualizar".
 - **✅ Incremental** usa `DtLastDH` com janela de segurança de 90s.
 - **✅ Nomenclatura** coerente (modelos em PT no Prisma e no código).
+
+## 🧪 Testes rápidos
+
+Para validar rapidamente as credenciais e o formato dos endpoints da Acessórias, execute os comandos abaixo (ajuste datas conforme necessário):
+
+```bash
+# Companies
+curl -H "Authorization: Bearer $ACESSORIAS_TOKEN" \
+  "$ACESSORIAS_API_BASE/companies/Geral/?Pagina=1"
+
+# Processes - em andamento
+curl -H "Authorization: Bearer $ACESSORIAS_TOKEN" \
+  "$ACESSORIAS_API_BASE/processes/ListAll/?Pagina=1&ProcStatus=A&DtLastDH=2025-11-05 00:00:00"
+
+# Processes - concluídos
+curl -H "Authorization: Bearer $ACESSORIAS_TOKEN" \
+  "$ACESSORIAS_API_BASE/processes/ListAll/?Pagina=1&ProcStatus=C&DtLastDH=2025-11-05 00:00:00"
+
+# Deliveries – mês atual (exemplo)
+curl -H "Authorization: Bearer $ACESSORIAS_TOKEN" \
+  "$ACESSORIAS_API_BASE/deliveries/ListAll/?DtInitial=2025-11-01&DtFinal=2025-11-30&DtLastDH=2025-11-05 00:00:00&Pagina=1"
+```
 
 ## 📁 Estrutura do Projeto
 
