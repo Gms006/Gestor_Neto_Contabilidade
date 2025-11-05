@@ -12,6 +12,8 @@
   "scripts": {
     "dev": "cross-env TS_NODE_PROJECT=tsconfig.json ts-node-dev --respawn --transpile-only src/server.ts",
     "dev:tsx": "tsx watch src/server.ts",
+    "dump:proc:all": "tsx src/tools/dumpProcesses.ts --status=all",
+    "dump:proc:range": "tsx src/tools/dumpProcesses.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "prisma": "prisma",
