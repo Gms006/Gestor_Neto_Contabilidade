@@ -226,15 +226,8 @@ def main() -> None:
 
     acessorias_cfg = cfg.get("acessorias", {})
     # Se seu AcessoriasClient aceitar token=..., pode passar explicitamente:
-    # client = AcessoriasClient(
-    #     base_url=acessorias_cfg.get("base_url"),
-    #     token=token,
-    #     page_size=int(acessorias_cfg.get("page_size", 20)),
-    #     rate_budget=int(acessorias_cfg.get("rate_budget", 90)),
-    # )
     client = AcessoriasClient(
         base_url=acessorias_cfg.get("base_url"),
-        page_size=int(acessorias_cfg.get("page_size", 20)),
         rate_budget=int(acessorias_cfg.get("rate_budget", 90)),
     )
 

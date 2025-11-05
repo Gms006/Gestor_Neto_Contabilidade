@@ -132,7 +132,6 @@ def main() -> None:
 
     client = AcessoriasClient(
         base_url=acessorias_cfg.get("base_url"),
-        page_size=int(acessorias_cfg.get("page_size", 20)),
         rate_budget=int(acessorias_cfg.get("rate_budget", 90)),
     )
 
@@ -168,9 +167,10 @@ def main() -> None:
         try:
             rows = client.list_deliveries(
                 identificador=identificador,
-                dt_initial=day_str, dt_final=day_str,
-                dt_last_dh=dt_last_dh, include_config=include_config,
-                page_size=50,
+                dt_initial=day_str,
+                dt_final=day_str,
+                dt_last_dh=dt_last_dh,
+                include_config=include_config,
             )
             log("fetch_deliveries","INFO","Dia coletado", day=day_str, count=len(rows))
             aggregated.extend(rows)
