@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -101,7 +102,6 @@ def main() -> None:
     acessorias_cfg = cfg.get("acessorias", {})
     client = AcessoriasClient(
         base_url=acessorias_cfg.get("base_url"),
-        page_size=int(acessorias_cfg.get("page_size", 20)),
         rate_budget=int(acessorias_cfg.get("rate_budget", 90)),
     )
 

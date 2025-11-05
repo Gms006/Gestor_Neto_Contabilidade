@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
-from urllib.parse import urljoin
-import json
 import os
 import time
 import random
 import logging
+from datetime import datetime, timedelta
 
 import requests
 
@@ -18,7 +17,7 @@ from scripts.utils import normalization
 
 LOG = logging.getLogger("acessorias_client")
 
-_BACKOFF_SECONDS = [1, 2, 4, 8, 16]
+_MAX_RETRIES = 7
 
 
 def _clean_cnpj(value: Optional[str]) -> Optional[str]:
@@ -31,7 +30,6 @@ def _clean_cnpj(value: Optional[str]) -> Optional[str]:
 @dataclass
 class AcessoriasClient:
     base_url: str | None = None
-    page_size: int = 20
     rate_budget: int = 90
 
     def __post_init__(self):
@@ -61,7 +59,7 @@ class AcessoriasClient:
         path: str,
         params: dict | None = None,
         method: str = "GET",
-        retries: int = 4,
+        retries: int = _MAX_RETRIES,
         timeout: int = 30,
     ) -> Any:
         """Request robusto com backoff, tratamento de erros e diagnóstico.
@@ -85,8 +83,26 @@ class AcessoriasClient:
                 body_excerpt = r.text[:400] if r.text else ""
                 last_text = body_excerpt
 
+                log(
+                    "acessorias_client",
+                    "DEBUG",
+                    "http_response",
+                    url=url,
+                    status=r.status_code,
+                    body_excerpt=body_excerpt,
+                )
+
                 # Sucesso direto
                 if 200 <= r.status_code < 300:
+                    if r.status_code == 204:
+                        log(
+                            "acessorias_client",
+                            "INFO",
+                            "http_no_content",
+                            url=url,
+                            params=params,
+                        )
+                        return []
                     if "application/json" in ct.lower():
                         return r.json()
                     # se não vier JSON, tenta mesmo assim
@@ -97,36 +113,79 @@ class AcessoriasClient:
 
                 # Tratamentos específicos
                 if r.status_code in (401, 403):
-                    raise RuntimeError(f"HTTP {r.status_code} (auth). Verifique ACESSORIAS_TOKEN.")
+                    raise RuntimeError(
+                        f"HTTP {r.status_code} (auth). Verifique ACESSORIAS_TOKEN."
+                    )
                 if r.status_code == 404:
-                    raise RuntimeError(f"HTTP 404 (endpoint/identificador). URL={url}")
+                    raise RuntimeError(
+                        f"HTTP 404. Rota não encontrada: {url}"
+                    )
                 if r.status_code == 429:
                     retry_after = r.headers.get("Retry-After")
-                    if retry_after and str(retry_after).isdigit():
-                        wait = int(retry_after)
+                    wait: float
+                    if retry_after:
+                        try:
+                            wait = float(retry_after)
+                        except (TypeError, ValueError):
+                            wait = 2 ** attempt + random.uniform(0, 1.0)
                     else:
                         wait = 2 ** attempt + random.uniform(0, 1.0)
-                    LOG.warning("429 rate limit. Aguardando %.1fs (tentativa %d/%d) - %s",
-                                wait, attempt, retries, url)
+                    log(
+                        "acessorias_client",
+                        "WARNING",
+                        "http_rate_limited",
+                        url=url,
+                        status=r.status_code,
+                        retry_after=retry_after,
+                    )
+                    LOG.warning(
+                        "429 rate limit. Aguardando %.1fs (tentativa %d/%d) - %s",
+                        wait,
+                        attempt,
+                        retries,
+                        url,
+                    )
                     time.sleep(wait)
                     continue
 
                 # 5xx -> backoff exponencial
                 if 500 <= r.status_code < 600:
                     wait = 2 ** attempt + random.uniform(0, 1.0)
-                    LOG.warning("HTTP %s. Retry em %.1fs (tentativa %d/%d). Resp: %s",
-                                r.status_code, wait, attempt, retries, body_excerpt)
+                    log(
+                        "acessorias_client",
+                        "ERROR",
+                        "http_server_error",
+                        url=url,
+                        status=r.status_code,
+                        body_excerpt=body_excerpt,
+                    )
+                    LOG.error(
+                        "API retornou %s. Retry em %.1fs (tentativa %d/%d). Resp: %s",
+                        r.status_code,
+                        wait,
+                        attempt,
+                        retries,
+                        body_excerpt,
+                    )
                     time.sleep(wait)
                     continue
 
                 # Demais erros
-                raise RuntimeError(f"HTTP {r.status_code}. URL={url}. Body[:400]={body_excerpt!r}")
+                raise RuntimeError(
+                    f"HTTP {r.status_code}. URL={url}. Body[:400]={body_excerpt!r}"
+                )
 
             except requests.RequestException as e:
                 last_exc = e
                 wait = 2 ** attempt + random.uniform(0, 1.0)
-                LOG.warning("Exceção de rede (%s). Retry em %.1fs (tentativa %d/%d) - %s",
-                            e.__class__.__name__, wait, attempt, retries, url)
+                LOG.warning(
+                    "Exceção de rede (%s). Retry em %.1fs (tentativa %d/%d) - %s",
+                    e.__class__.__name__,
+                    wait,
+                    attempt,
+                    retries,
+                    url,
+                )
                 time.sleep(wait)
                 continue
 
@@ -154,69 +213,84 @@ class AcessoriasClient:
         self,
         statuses: Optional[Iterable[str]] = None,
         dt_last_dh: Optional[str] = None,
-        page_size: Optional[int] = None,
+        include_steps: bool = False,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Varre /processes/ListAll paginando (?Pagina=, ?PageSize=) e,
-        se informado, filtra por ProcStatus e DtLastDH (quando suportado).
-        """
-        values = [s for s in (statuses or []) if s]
-        if not statuses or statuses == []:
-            values = [None]  # ALL
+        """Lista processos com suporte aos filtros documentados."""
+
+        status_values = [s for s in (statuses or []) if s]
+        if not status_values:
+            status_values = [None]
+
+        filters = dict(filters or {})
+        allowed_filter_keys = {
+            "ProcNome",
+            "ProcInicioIni",
+            "ProcInicioFim",
+            "ProcConclusaoIni",
+            "ProcConclusaoFim",
+            "DtLastDH",
+        }
+
+        if dt_last_dh:
+            filters["DtLastDH"] = dt_last_dh
+
+        request_filters = {
+            key: value
+            for key, value in filters.items()
+            if key in allowed_filter_keys and value not in (None, "")
+        }
 
         results: List[Dict[str, Any]] = []
-        for status in values:
+        path = "processes/ListAll*" if include_steps else "processes/ListAll"
+
+        for status in status_values:
             page = 1
             while True:
-                params: Dict[str, Any] = {"Pagina": page, "PageSize": page_size or self.page_size}
+                params: Dict[str, Any] = {"Pagina": page, **request_filters}
                 if status:
                     params["ProcStatus"] = status
-                if dt_last_dh:
-                    params["DtLastDH"] = dt_last_dh
 
-                # Prioriza o canônico; mantém fallbacks
-                path_options = [
-                    "/processes/ListAll",    # canônico
-                    "/processes/ListAll/",   # barra final
-                    "/processes/ListAll*/",  # variante legada (se existir)
-                ]
+                payload = self._request(path, params)
 
-                data = None
-                used_path = None
-                for path in path_options:
-                    payload = self._request(path, params)
-                    if payload is None:
-                        continue
-                    data = payload
-                    used_path = path
+                if payload is None:
+                    raise RuntimeError("Rota /processes não retornou dados")
+
+                if not payload:
+                    if page == 1:
+                        safe_filters = {
+                            key: str(value)
+                            for key, value in request_filters.items()
+                        }
+                        log(
+                            "acessorias_client",
+                            "INFO",
+                            "processes_empty",
+                            status=status or "ALL",
+                            filters=safe_filters,
+                        )
                     break
 
-                if used_path:
-                    log(
-                        "acessorias_client",
-                        "DEBUG",
-                        "process_endpoint",
-                        status=status or "ALL",
-                        page=page,
-                        path=used_path,
-                    )
-
-                if data is None:
-                    raise RuntimeError("Endpoints de processes não disponíveis (/processes/ListAll)")
-
-                if not data:
-                    break
-
-                # aceita list direto ou dict com "items"
-                if isinstance(data, dict) and "items" in data:
-                    page_records = list(data.get("items") or [])
-                elif isinstance(data, dict):
-                    page_records = [data]
+                if isinstance(payload, dict) and "items" in payload:
+                    page_records = list(payload.get("items") or [])
+                elif isinstance(payload, dict):
+                    page_records = [payload]
                 else:
-                    page_records = list(data)
+                    page_records = list(payload)
 
                 normalized = self._normalize_records(page_records)
                 results.extend(normalized)
+
+                log(
+                    "acessorias_client",
+                    "DEBUG",
+                    "processes_page",
+                    status=status or "ALL",
+                    page=page,
+                    count=len(normalized),
+                    include_steps=include_steps,
+                    filters={key: str(value) for key, value in request_filters.items()},
+                )
 
                 page += 1
                 time.sleep(self.sleep_seconds)
@@ -224,7 +298,12 @@ class AcessoriasClient:
 
     # ------------------------------------------------------------------
     def get_process(self, proc_id: str) -> Dict[str, Any]:
-        variants = [f"/processes/{proc_id}", f"/processes/{proc_id}/", f"/processes/{proc_id}*/"]
+        variants = [
+            f"processes/{proc_id}",
+            f"processes/{proc_id}*",
+            f"processes/{proc_id}/",
+            f"processes/{proc_id}*/",
+        ]
         for path in variants:
             data = self._request(path, None)
             if data is None:
@@ -237,7 +316,7 @@ class AcessoriasClient:
             if isinstance(data, dict):
                 normalized = self._normalize_records([data])
                 return normalized[0] if normalized else {}
-        raise RuntimeError(f"Endpoint de processo {proc_id} não disponível")
+        raise RuntimeError(f"Processo {proc_id} não encontrado na rota /processes")
 
     # ------------------------------------------------------------------
     def list_deliveries(
@@ -247,11 +326,23 @@ class AcessoriasClient:
         dt_final: str,
         dt_last_dh: Optional[str] = None,
         include_config: bool = True,
-        page_size: int = 50,
     ) -> List[Dict[str, Any]]:
-        if identificador == "ListAll" and not dt_last_dh:
-            log("acessorias_client", "ERROR", "ListAll exige DtLastDH")
-            raise ValueError("DtLastDH é obrigatório quando Identificador=ListAll")
+        if identificador == "ListAll":
+            if not dt_last_dh:
+                log("acessorias_client", "ERROR", "ListAll exige DtLastDH")
+                raise ValueError("DtLastDH é obrigatório quando Identificador=ListAll")
+            try:
+                normalized_last = dt_last_dh.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(normalized_last)
+            except ValueError as exc:
+                raise ValueError("DtLastDH deve estar no formato ISO YYYY-MM-DD HH:MM:SS") from exc
+            today = datetime.now()
+            if dt.tzinfo:
+                today = datetime.now(tz=dt.tzinfo)
+            if dt.date() < (today - timedelta(days=1)).date() or dt.date() > today.date():
+                raise ValueError(
+                    "DtLastDH para ListAll deve ser do dia atual ou anterior"
+                )
 
         results: List[Dict[str, Any]] = []
         page = 1
@@ -260,14 +351,13 @@ class AcessoriasClient:
                 "Pagina": page,
                 "DtInitial": dt_initial,
                 "DtFinal": dt_final,
-                "PageSize": page_size,
             }
             if dt_last_dh:
                 params["DtLastDH"] = dt_last_dh
             if include_config:
                 params["config"] = ""
 
-            payload = self._request(f"/deliveries/{identificador}/", params)
+            payload = self._request(f"deliveries/{identificador}/", params)
             if payload is None:
                 raise RuntimeError("Endpoint deliveries não disponível")
             if not payload:
@@ -303,20 +393,18 @@ class AcessoriasClient:
     def list_companies_obligations(
         self,
         identificador: str = "ListAll",
-        page_size: int = 20,
     ) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
         page = 1
         while True:
             params: Dict[str, Any] = {
                 "Pagina": page,
-                "PageSize": page_size,
                 "obligations": "",
             }
 
-            payload = self._request(f"/companies/{identificador}/", params)
+            payload = self._request(f"companies/{identificador}/", params)
             if payload is None:
-                payload = self._request(f"/companies/{identificador}", params)
+                payload = self._request(f"companies/{identificador}", params)
                 if payload is None:
                     raise RuntimeError("Endpoint companies não disponível")
             if not payload:
