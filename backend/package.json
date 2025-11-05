@@ -10,10 +10,10 @@
     "node": ">=18"
   },
   "scripts": {
-    "dev": "cross-env TS_NODE_PROJECT=tsconfig.json ts-node-dev --respawn --transpile-only src/server.ts",
-    "dev:tsx": "tsx watch src/server.ts",
-    "dump:proc:all": "tsx src/tools/dumpProcesses.ts --status=all",
-    "dump:proc:range": "tsx src/tools/dumpProcesses.ts",
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "dump:processes": "tsx src/tools/dumpProcesses.ts",
+    "dump:andamento": "tsx src/tools/dumpProcesses.ts --status=em_andamento",
+    "dump:concluido": "tsx src/tools/dumpProcesses.ts --status=concluido",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "prisma": "prisma",
@@ -47,7 +47,7 @@
     "prettier": "^3.2.5",
     "prisma": "^5.22.0",
     "ts-node-dev": "^2.0.0",
-    "tsx": "^4.15.7",
-    "typescript": "^5.4.5"
+    "tsx": "^4.19.1",
+    "typescript": "^5.9.3"
   }
 }
