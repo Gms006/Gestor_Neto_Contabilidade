@@ -55,6 +55,14 @@ except Exception:
     def normalize_structure(x):  # type: ignore
         return x
 
+# Importar módulos do banco de dados
+try:
+    from scripts.db import get_session, init_db, bulk_upsert_processes, upsert_company
+    DB_AVAILABLE = True
+except Exception as e:
+    logger.warning(f"Banco de dados não disponível: {e}")
+    DB_AVAILABLE = False
+
 # Paths
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
@@ -226,15 +234,8 @@ def main() -> None:
 
     acessorias_cfg = cfg.get("acessorias", {})
     # Se seu AcessoriasClient aceitar token=..., pode passar explicitamente:
-    # client = AcessoriasClient(
-    #     base_url=acessorias_cfg.get("base_url"),
-    #     token=token,
-    #     page_size=int(acessorias_cfg.get("page_size", 20)),
-    #     rate_budget=int(acessorias_cfg.get("rate_budget", 90)),
-    # )
     client = AcessoriasClient(
         base_url=acessorias_cfg.get("base_url"),
-        page_size=int(acessorias_cfg.get("page_size", 20)),
         rate_budget=int(acessorias_cfg.get("rate_budget", 90)),
     )
 
@@ -268,7 +269,39 @@ def main() -> None:
             encoding="utf-8",
         )
 
-    # arquivo agregado
+    # Persistir no banco de dados
+    if DB_AVAILABLE:
+        try:
+            init_db()
+            session = get_session()
+            
+            # Extrair empresas únicas e fazer upsert
+            companies_seen = set()
+            for item in normalized:
+                cnpj = item.get("CNPJ") or item.get("cnpj") or item.get("EmpCNPJ")
+                if cnpj:
+                    cnpj_clean = "".join(c for c in str(cnpj) if c.isdigit())
+                    if cnpj_clean and cnpj_clean not in companies_seen:
+                        companies_seen.add(cnpj_clean)
+                        try:
+                            upsert_company(session, {
+                                "cnpj": cnpj_clean,
+                                "nome": item.get("EmpNome") or item.get("empresa_nome") or ""
+                            })
+                        except Exception as e:
+                            logger.warning(f"Erro ao fazer upsert de company {cnpj_clean}: {e}")
+            
+            session.commit()
+            
+            # Fazer upsert dos processos
+            count = bulk_upsert_processes(session, normalized)
+            session.close()
+            
+            log("fetch_api", "INFO", "Persistido no banco de dados", total=count)
+        except Exception as e:
+            logger.error(f"Erro ao persistir no banco: {e}")
+    
+    # arquivo agregado (snapshot JSON para fallback)
     output_path = DATA / "api_processes.json"
     output_path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
     log("fetch_api", "INFO", "Salvo api_processes.json", total=len(normalized))

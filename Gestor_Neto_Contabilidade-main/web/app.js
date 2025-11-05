@@ -31,6 +31,23 @@ async function loadJSON(path, { force = false } = {}) {
   }
 }
 
+// Wrapper para tentar API primeiro, depois fallback para JSON
+async function apiOrJson(pathApi, fallbackJson) {
+  try {
+    const r = await fetch(pathApi, { cache: 'no-cache' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    // Cachear resultado
+    state.cache[fallbackJson] = data;
+    return data;
+  } catch (e) {
+    console.warn(`API ${pathApi} falhou, usando fallback ${fallbackJson}`, e);
+    // Garantir que o fallback seja relativo ao HTML (../data/...)
+    const fallbackPath = fallbackJson.startsWith('/') ? fallbackJson.replace(/^\//, '../') : fallbackJson;
+    return await loadJSON(fallbackPath);
+  }
+}
+
 function saveFilters(tab, obj) {
   localStorage.setItem(`gst.filters.${tab}`, JSON.stringify(obj));
 }
@@ -365,11 +382,19 @@ function syncHash(tab, extras = {}) {
   updateHash(tab, filters, payload);
 }
 
-/* ----------------------- DASHBOARD ----------------------- */
-async function renderDashboard() {
-  const proc = await loadJSON('../data/processes.json');
-  const events = await loadJSON('../data/events.json');
-  await loadJSON('../data/kpis.json');
+/* ----------------------- DASHBOARD ----------------------- */async function renderDashboard() {
+  // Aplicando a lógica de API com fallback para JSON para os 4 cards principais
+  const [reinf, efdc, difal, fechamento] = await Promise.all([
+    apiOrJson('/api/dashboard/reinf', '../data/reinf_competencia.json'),
+    apiOrJson('/api/dashboard/efdcontrib', '../data/efdcontrib_competencia.json'),
+    apiOrJson('/api/dashboard/difal', '../data/difal_tipo.json'),
+    apiOrJson('/api/dashboard/fechamento', '../data/fechamento_stats.json'),
+  ]);
+
+  // Carregando processos e eventos (deliveries) com fallback
+  const proc = await apiOrJson('/api/processos?limite=10000', '../data/processes.json');
+  const events = await apiOrJson('/api/deliveries', '../data/events.json');
+  await apiOrJson('/api/kpis', '../data/kpis.json');
 
   const hasEvents = Array.isArray(events) && events.length > 0;
   let fallbackTotals = null;
@@ -392,14 +417,9 @@ async function renderDashboard() {
   const finalizadosMes = (proc || []).filter((p) => (p.conclusao || '').startsWith(ym)).length;
 
   const lt = (proc || [])
-    .map((p) => Number(p.dias_corridos || p.lead_time || 0))
-    .filter((n) => Number.isFinite(n) && n > 0);
-  const avg = lt.length ? Math.round(lt.reduce((a, b) => a + b, 0) / lt.length) : 0;
-  const med = lt.length ? [...lt].sort((a, b) => a - b)[Math.floor(lt.length / 2)] : 0;
-
-  const countBy = (categoria, status) =>
-    (events || []).filter(
-      (e) => e.categoria === categoria && (!status || e.status === status) && (e.competencia || '').startsWith(ym),
+    .filter((p) => p.status === 'Concluído')
+    .sort((a, b) => compareValues(b.conclusao, a.conclusao))
+    .slice(0, 5);categoria && (!status || e.status === status) && (e.competencia || '').startsWith(ym),
     ).length;
 
   const card = (title, value, note = '') => `
@@ -549,7 +569,8 @@ async function renderDashboard() {
 }
 /* ----------------------- OBRIGAÇÕES (EVENTOS) ----------------------- */
 async function renderObrigacoes() {
-  const events = await loadJSON('../data/events.json');
+  // Usar o endpoint /api/deliveries (que deve retornar o mesmo shape de events.json)
+  const events = await apiOrJson('/api/deliveries', '../data/events.json');
   const hasEvents = Array.isArray(events) && events.length > 0;
   let emptyContent = 'Sem dados de obrigações no momento. Execute a coleta ou ajuste os filtros.';
   if (!hasEvents) {
@@ -832,7 +853,8 @@ async function renderObrigacoes() {
 }
 /* ----------------------- PROCESSOS ----------------------- */
 async function renderProcessos() {
-  const proc = await loadJSON('../data/processes.json');
+  // Usar o endpoint /api/processos para a lista de processos com fallback para processes.json
+  const proc = await apiOrJson('/api/processos?limite=10000', '../data/processes.json');
   const tab = 'processos';
   const uniq = (arr) => [...new Set(arr.filter(Boolean))].sort((a, b) => compareValues(a, b));
 
@@ -1187,8 +1209,9 @@ async function renderAlertas() {
 
 /* ----------------------- EMPRESAS ----------------------- */
 async function renderEmpresas() {
-  const events = await loadJSON('../data/events.json');
-  const proc = await loadJSON('../data/processes.json');
+  // Usar os endpoints corretos para as abas
+  const events = await apiOrJson('/api/deliveries', '../data/events.json');
+  const proc = await apiOrJson('/api/processos?limite=10000', '../data/processes.json');
   const box = $('#cards-empresas');
   const q = $('#q-emp');
   if (!box || !q) return;

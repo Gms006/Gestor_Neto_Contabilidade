@@ -9,6 +9,15 @@ from typing import Any, Dict, Iterable, List
 
 from scripts.utils.logger import log
 
+# Importar módulos do banco de dados
+try:
+    from scripts.db import get_session, Delivery
+    DB_AVAILABLE = True
+except Exception as e:
+    import logging
+    logging.warning(f"Banco de dados não disponível: {e}")
+    DB_AVAILABLE = False
+
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 EVT_API = DATA / "events_api.json"
@@ -72,8 +81,55 @@ def fuse(api_events: Iterable[Dict[str, Any]], email_events: Iterable[Dict[str, 
     return list(merged.values()), divergences
 
 
+def load_events_from_db() -> List[Dict[str, Any]]:
+    """Carrega deliveries do banco de dados."""
+    if not DB_AVAILABLE:
+        return []
+    
+    try:
+        session = get_session()
+        deliveries = session.query(Delivery).all()
+        
+        events = []
+        for deliv in deliveries:
+            event = {
+                "source": "api",
+                "empresa": deliv.company_id,
+                "subtipo": deliv.nome,
+                "categoria": deliv.categoria,
+                "status": deliv.status,
+                "competencia": deliv.competencia,
+                "prazo": deliv.prazo.isoformat() if deliv.prazo else None,
+                "entrega": deliv.entregue_em.isoformat() if deliv.entregue_em else None,
+            }
+            
+            # Adicionar dados completos se disponíveis
+            if deliv.raw_data:
+                try:
+                    raw = json.loads(deliv.raw_data)
+                    event.update(raw)
+                except:
+                    pass
+            
+            events.append(event)
+        
+        session.close()
+        return events
+        
+    except Exception as e:
+        log("fuse_sources", "ERROR", "Erro ao carregar do banco", error=str(e))
+        return []
+
+
 def main() -> None:
-    api_events = load_events(EVT_API)
+    # Tentar carregar do banco primeiro, depois fallback para JSON
+    if DB_AVAILABLE:
+        api_events = load_events_from_db()
+        if not api_events:
+            api_events = load_events(EVT_API)
+    else:
+        api_events = load_events(EVT_API)
+    
     email_events = load_events(EVT_MAIL)
     log("fuse_sources", "INFO", "Eventos carregados", api=len(api_events), email=len(email_events))
 

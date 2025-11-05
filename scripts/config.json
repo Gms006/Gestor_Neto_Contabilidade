@@ -1,18 +1,24 @@
 {
   "acessorias": {
     "base_url": "https://api.acessorias.com",
-    "endpoints": { "processes": "/processes", "deliveries": "/deliveries", "companies": "/companies" },
     "page_size": 20,
-    "proc_status": "A,C",
+    "rate_budget": 90,
+    "statuses": [],
     "dt_last_dh": null
   },
-  "email": { "provider": "imap" },
-  "imap": {
-    "search_days": 180,
-    "max_messages": 2000,
-    "subject_keywords": ["Simples Nacional", "Lucro Presumido", "Lucro Real", "Controle mensal", "Processo fiscal"],
-    "from_filters": []
+  "deliveries": {
+    "enabled": true,
+    "identificador": "ListAll",
+    "days_back": 120,
+    "days_forward": 0,
+    "use_dt_last_dh": true
   },
-  "deadlines": { "sn_day": 20, "reinf_day": 15 },
-  "warning_days": { "sn": 3, "reinf": 3 }
+  "deadlines": {
+    "reinf_day": 15,
+    "efd_contrib_day": 20,
+    "risk_window_days": 5
+  },
+  "imap": {
+    "search_days": 180
+  }
 }

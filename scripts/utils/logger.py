@@ -1,41 +1,32 @@
-"""
-logger.py
-Sistema de logging centralizado
-"""
+"""Simple structured logger writing to data/logs.txt"""
+from __future__ import annotations
 
-import logging
+from datetime import datetime, timezone
 from pathlib import Path
-from datetime import datetime
+import json
+import threading
 
-BASE_DIR = Path(__file__).parent.parent.parent
-LOG_DIR = BASE_DIR / 'data'
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+_BASE = Path(__file__).resolve().parents[2]
+_LOG_FILE = _BASE / "data" / "logs.txt"
+_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+_LOCK = threading.Lock()
 
-def setup_logger(name):
-    """Configura logger com output para console e arquivo"""
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.INFO)
-    
-    # Remove handlers existentes
-    logger.handlers = []
-    
-    # Formato
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-    
-    # File handler
-    log_file = LOG_DIR / 'logs.txt'
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    
-    return logger
+def _ts() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def log(component: str, level: str, message: str, **extra):
+    """Append a structured log line."""
+    payload = {
+        "ts": _ts(),
+        "component": component,
+        "level": level.upper(),
+        "msg": message,
+    }
+    if extra:
+        payload["extra"] = extra
+    line = json.dumps(payload, ensure_ascii=False)
+    with _LOCK:
+        with _LOG_FILE.open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    print(f"[{payload['level']}] {component}: {message}")
