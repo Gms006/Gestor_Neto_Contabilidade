@@ -1,26 +1,20 @@
 @echo off
 setlocal enableextensions
 
-REM === CONFIGURE AQUI SE PRECISAR ===
+REM === CONFIGURE AQUI ===
 set "REPO_DIR=C:\Gestor_Neto_Contabilidade-main"
 set "BRANCH=main"
-REM Cole a URL do seu repositório (HTTPS ou SSH):
-REM Ex.: https://github.com/Gms006/Gestor_Neto_Contabilidade.git
 set "REMOTE_URL=https://github.com/Gms006/Gestor_Neto_Contabilidade.git"
+for /f "tokens=1-3 delims=/ " %%a in ("%date%") do set DATESTAMP=%date:~6,4%%date:~3,2%%date:~0,2%
+set "BACKUP_TAG=backup_before_force_%DATESTAMP%"
 
-REM === IDENTIDADE (global, faz uma vez no PC) ===
 git config --global user.name  "Gms006"
 git config --global user.email "joaovguimas@gmail.com"
 
 cd /d "%REPO_DIR%" || (echo Pasta nao encontrada & exit /b 1)
 
-REM === inicializa repo se ainda nao for ===
-if not exist ".git" (
-  echo Inicializando repositório...
-  git init
-)
+if not exist ".git" git init
 
-REM === garante remoto 'origin' apontando pro seu GitHub ===
 for /f "delims=" %%r in ('git remote') do set HASREMOTE=%%r
 if not defined HASREMOTE (
   git remote add origin "%REMOTE_URL%"
@@ -28,19 +22,21 @@ if not defined HASREMOTE (
   git remote set-url origin "%REMOTE_URL%"
 )
 
-REM === pega o estado do remoto (se existir) ===
-git fetch origin 2>nul
+REM pega estado remoto e cria tag de backup (se remoto existir)
+git fetch origin
+REM cria tag local e tenta enviar (nao falha se nao existir remoto ainda)
+git tag -f "%BACKUP_TAG%" "origin/%BRANCH%" 2>nul
+git push origin "%BACKUP_TAG%" 2>nul
 
-REM === cria (ou muda para) a branch desejada ===
 git checkout -B "%BRANCH%"
 
-REM === adiciona e commita tudo ===
 git add -A
-git commit -m "chore: sync local -> remote (push normal)" || echo Nada para commitar
+git commit -m "chore: replace remote with local snapshot" || echo Nada para commitar
 
-REM === envia (sem -f) ===
-git push -u origin "%BRANCH%"
+REM === o pulo do gato: sobrescreve o remoto ===
+git push -u origin "%BRANCH%" -f
 
 echo.
-echo ✅ Concluido: push normal para %BRANCH%.
+echo ✅ Concluido: FORCE PUSH feito para %BRANCH%.
+echo 💾 Tag de backup (se existia remoto): %BACKUP_TAG%
 pause
