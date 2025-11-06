@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { subMonths } from "date-fns";
-import { getProcess, listDeliveries, listProcesses } from "../clients/acessoriasClient";
-import { resolveCompanyExternalId, resolveProcessExternalId } from "../repositories/processRepo";
+import { getProcess, listDeliveries, listProcesses } from "../clients/acessoriasClient.js";
+import { resolveCompanyExternalId, resolveProcessExternalId } from "../repositories/processRepo.js";
 
 interface CliArgs {
   status: "ALL" | "OPEN" | "CLOSED";
@@ -158,7 +158,7 @@ async function main() {
   const processes = await listProcesses(apiFilters);
 
   const filteredProcesses = empresaFilter
-    ? processes.filter((summary) => {
+    ? processes.filter((summary: Record<string, unknown>) => {
         const companyId = resolveCompanyExternalId(summary);
         if (!companyId) return false;
         return companyId.includes(empresaFilter);

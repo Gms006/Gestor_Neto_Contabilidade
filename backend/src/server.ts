@@ -2,16 +2,17 @@
 import express from "express";
 import cors from "cors";
 import path from "path";
+import { fileURLToPath } from "url";
 
-import { env } from "./lib/env";
-import { logger } from "./lib/logger";
-import { startScheduler } from "./scheduler/scheduler";
-import { syncRouter } from "./routes/sync";
-import { dataRouter } from "./routes/data";
-import { syncAll } from "./services/syncService";
+import { env } from "./lib/env.js";
+import { logger } from "./lib/logger.js";
+import { startScheduler } from "./scheduler/scheduler.js";
+import { syncRouter } from "./routes/sync.js";
+import { dataRouter } from "./routes/data.js";
+import { syncAll } from "./services/syncService.js";
 
-// Em CommonJS (tsconfig.module = "CommonJS") o __dirname já existe.
-// Não use import.meta.url / fileURLToPath aqui.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 async function bootstrap() {
   const app = express();
