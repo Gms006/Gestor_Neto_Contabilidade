@@ -23,9 +23,20 @@ const DEFAULT_MONTHS_HISTORY = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 6;
 })();
 
-function resolveStatuses(input?: string[] | "ALL"): string[] {
-  if (!input || input === "ALL") {
-    return ["A", "C"];
+async function fetchProcessDetails(summaries: Raw[]): Promise<Map<string, Raw | null>> {
+  const details = new Map<string, Raw | null>();
+  for (const summary of summaries) {
+    const externalId = resolveProcessExternalId(summary);
+    if (!externalId) {
+      continue;
+    }
+    try {
+      const detail = await fetchWithRetry<Raw>(buildUrl('processes', { ident: externalId }));
+      details.set(externalId, detail);
+    } catch (error) {
+      logger.warn({ externalId, err: (error as Error).message }, 'Falha ao obter detalhes do processo');
+      details.set(externalId, null);
+    }
   }
   const list = Array.isArray(input) ? input : [input];
   return Array.from(
@@ -167,6 +178,29 @@ async function syncDeliveries(opts: SyncOptions): Promise<number> {
 
   const companies = await prisma.company.findMany({ select: { externalId: true } });
   let total = 0;
+  let latestDh: Date | null = lastDh;
+
+  for (const ident of identifiers) {
+    if (!ident) continue;
+    logger.info({ resource: 'deliveries', ident }, 'Listando entregas');
+    const deliveries = await fetchAllPages<Raw>((page: number) =>
+      buildUrl('deliveries', {
+        ident,
+        query: {
+          Pagina: page,
+          DtInitial: dtInitial,
+          DtFinal: dtFinal,
+          ...(dtLastDhParam ? { DtLastDH: dtLastDhParam } : {}),
+        },
+      })
+    );
+
+    if (deliveries.length === 0) {
+      continue;
+    }
+
+    await upsertDeliveriesBatch(ident, deliveries);
+    total += deliveries.length;
 
   for (const company of companies) {
     if (!company.externalId) continue;

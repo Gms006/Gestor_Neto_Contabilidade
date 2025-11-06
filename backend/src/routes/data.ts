@@ -15,7 +15,7 @@ const STATUS_QUERY_TO_NORMALIZED: Record<string, string | undefined> = {
   todos: undefined,
 };
 
-dataRouter.get("/processes", async (req, res) => {
+dataRouter.get("/processes/summary", async (_req, res) => {
   try {
     const statusQuery =
       typeof req.query.status === "string" ? req.query.status.toLowerCase() : "all";

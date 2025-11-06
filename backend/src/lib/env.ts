@@ -2,18 +2,25 @@
 import * as dotenv from "dotenv";
 dotenv.config();
 
-function required(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`Env "${name}" ausente no .env`);
-  return v;
-}
-
 const DEFAULT_ACESSORIAS_BASE = "https://api.acessorias.com";
 
 function resolveAcessoriasBase() {
   const candidate =
-    process.env.ACESSORIAS_API_BASE ?? process.env.ACESSORIAS_BASE_URL ?? "";
+    process.env.ACESSORIAS_API_BASE ??
+    process.env.ACESSORIAS_BASE_URL ??
+    process.env.ACESSORIAS_API_URL ??
+    "";
   return candidate.trim() || DEFAULT_ACESSORIAS_BASE;
+}
+
+function resolveAcessoriasToken() {
+  const candidate =
+    process.env.ACESSORIAS_API_TOKEN ?? process.env.ACESSORIAS_TOKEN ?? "";
+  const trimmed = candidate.trim();
+  if (!trimmed) {
+    throw new Error('Env "ACESSORIAS_API_TOKEN" ausente no .env');
+  }
+  return trimmed;
 }
 
 export const env = {
@@ -23,13 +30,13 @@ export const env = {
   // Acessórias API
   ACESSORIAS_BASE_URL: resolveAcessoriasBase(),
   ACESSORIAS_API_BASE: resolveAcessoriasBase(),
-  ACESSORIAS_TOKEN: required("ACESSORIAS_TOKEN"),
+  ACESSORIAS_TOKEN: resolveAcessoriasToken(),
 
   // ✅ alias compatível com o acessoriasClient
   acessorias: {
     baseURL: resolveAcessoriasBase(),
     apiBase: resolveAcessoriasBase(),
-    token: required("ACESSORIAS_TOKEN"),
+    token: resolveAcessoriasToken(),
   },
 
   // Prisma logs opcionais: PRISMA_LOG=query,info,warn,error

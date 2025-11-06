@@ -1,6 +1,6 @@
 // src/routes/sync.ts
 import { Router } from "express";
-import { syncAll, getMeta } from "../services/syncService";
+import { syncAll, getMeta } from "../services/syncService.js";
 
 export const syncRouter = Router();
 
