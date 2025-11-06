@@ -10,12 +10,12 @@
     "node": ">=18"
   },
   "scripts": {
-    "dev": "cross-env TS_NODE_PROJECT=tsconfig.json ts-node-dev --respawn --transpile-only src/server.ts",
-    "dump:proc:all": "cross-env TS_NODE_PROJECT=tsconfig.json ts-node src/tools/dumpProcesses.ts --status=ALL",
-    "dump:proc:open": "cross-env TS_NODE_PROJECT=tsconfig.json ts-node src/tools/dumpProcesses.ts --status=OPEN",
-    "dump:proc:closed": "cross-env TS_NODE_PROJECT=tsconfig.json ts-node src/tools/dumpProcesses.ts --status=CLOSED",
+    "dev": "cross-env NODE_ENV=development tsx watch src/server.ts",
+    "dump:proc:all": "tsx src/tools/dumpProcesses.ts --status=ALL",
+    "dump:proc:open": "tsx src/tools/dumpProcesses.ts --status=OPEN",
+    "dump:proc:closed": "tsx src/tools/dumpProcesses.ts --status=CLOSED",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
+    "start": "node --env-file=.env dist/server.js",
     "prisma": "prisma",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -46,8 +46,6 @@
     "pino-pretty": "^13.1.2",
     "prettier": "^3.2.5",
     "prisma": "^5.22.0",
-    "ts-node": "^10.9.2",
-    "ts-node-dev": "^2.0.0",
     "tsx": "^4.19.1",
     "typescript": "^5.9.3"
   }
