@@ -1,9 +1,9 @@
 // src/scheduler/scheduler.ts
-import cron from "node-cron";
+import cron, { ScheduledTask } from "node-cron";
 import { logger } from "../lib/logger";
 import { syncAll } from "../services/syncService";
 
-let task: cron.ScheduledTask | null = null;
+let task: ScheduledTask | null = null;
 
 /**
  * CRON: minuto 0, de 3 em 3 horas (00:00, 03:00, 06:00, …)
