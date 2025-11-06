@@ -1,139 +1,173 @@
-// src/clients/acessoriasClient.ts
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosError, AxiosInstance } from "axios";
 
-const {
-  ACESSORIAS_API_BASE = 'https://api.acessorias.com',
-  ACESSORIAS_AUTH_HEADER = 'Authorization',
-  ACESSORIAS_TOKEN = '',
-  ACESSORIAS_TIMEOUT_MS = '30000',
-  ACESSORIAS_LOG_HTTP = 'false',
-} = process.env;
+const BASE_URL = process.env.ACESSORIAS_API_BASE ?? "https://api.acessorias.com";
+const TOKEN = process.env.ACESSORIAS_TOKEN ?? "";
 
-function headers(): Record<string, string> {
-  const h: Record<string, string> = {
-    'User-Agent': 'NetoContabilidade-Gestor/1.0',
-    'Accept': 'application/json',
-  };
-  if (ACESSORIAS_TOKEN) {
-    if (ACESSORIAS_AUTH_HEADER.toLowerCase() === 'authorization' &&
-        !ACESSORIAS_TOKEN.toLowerCase().startsWith('bearer')) {
-      h['Authorization'] = `Bearer ${ACESSORIAS_TOKEN}`;
-    } else {
-      h[ACESSORIAS_AUTH_HEADER] = ACESSORIAS_TOKEN;
+const MAX_REQUESTS_PER_MINUTE = 100;
+const MIN_INTERVAL_MS = Math.ceil(60000 / MAX_REQUESTS_PER_MINUTE);
+const MAX_RETRIES = 5;
+const BASE_RETRY_DELAY_MS = 500;
+
+const defaultHeaders: Record<string, string> = {
+  "User-Agent": "NetoContabilidade-Gestor/1.0",
+  Accept: "application/json",
+};
+
+if (TOKEN) {
+  defaultHeaders["Authorization"] = `Bearer ${TOKEN}`;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+let rateLimiter: Promise<void> = Promise.resolve();
+let nextAvailableAt = Date.now();
+
+function applyRateLimit(): Promise<void> {
+  rateLimiter = rateLimiter.then(async () => {
+    const now = Date.now();
+    const waitFor = Math.max(0, nextAvailableAt - now);
+    if (waitFor > 0) {
+      await delay(waitFor);
+    }
+    const jitter = Math.random() * 50;
+    nextAvailableAt = Date.now() + MIN_INTERVAL_MS + jitter;
+  });
+  return rateLimiter;
+}
+
+function shouldRetry(error: AxiosError): boolean {
+  const status = error.response?.status ?? 0;
+  return status === 429 || (status >= 500 && status < 600);
+}
+
+function computeRetryDelay(error: AxiosError, attempt: number): number {
+  const retryAfterHeader = error.response?.headers?.["retry-after"];
+  if (retryAfterHeader) {
+    const retryAfterSeconds = Number(retryAfterHeader);
+    if (!Number.isNaN(retryAfterSeconds) && retryAfterSeconds > 0) {
+      return retryAfterSeconds * 1000;
     }
   }
-  return h;
+  const baseDelay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+  const jitter = Math.random() * 250;
+  return baseDelay + jitter;
 }
 
-export interface Company { id?: number|string; empresaId?: number; cnpj?: string; nome?: string; razaoSocial?: string; [k: string]: any }
-export interface Process { id: number|string; empresaId?: number|string; titulo?: string; status?: string; progress?: number; [k: string]: any }
-export interface Delivery { id: number|string; processoId?: number|string; descricao?: string; status?: string; [k: string]: any }
-
-function buildUrl(resource: string, qs: Record<string, any> = {}): string {
-  const base = ACESSORIAS_API_BASE.replace(/\/+$/, '');
-  const path = resource.startsWith('/') ? resource : `/${resource}`;
-  const u = new URL(base + path);
-  Object.entries(qs).forEach(([k, v]) => {
-    if (v === undefined || v === null || v === '') return;
-    u.searchParams.set(k, String(v));
-  });
-  return u.toString();
-}
-
-function newClient(): AxiosInstance {
+function createClient(): AxiosInstance {
   const instance = axios.create({
-    timeout: Number(ACESSORIAS_TIMEOUT_MS),
-    headers: headers(),
+    baseURL: BASE_URL,
+    headers: defaultHeaders,
+  });
+
+  instance.interceptors.request.use(async (config) => {
+    await applyRateLimit();
+    return config;
   });
 
   instance.interceptors.response.use(
-    r => {
-      if (ACESSORIAS_LOG_HTTP === 'true') {
-        console.log('[HTTP]', r.status, r.config.method?.toUpperCase(), r.config.url);
+    (response) => response,
+    async (error: AxiosError) => {
+      const config: any = error.config ?? {};
+      if (!config || !shouldRetry(error)) {
+        throw error;
       }
-      return r;
-    },
-    async (err) => {
-      const status = err?.response?.status;
-      const cfg = err?.config ?? {};
-      const retriable = status === 429 || (status >= 500 && status < 600);
-      cfg.__retries = (cfg.__retries ?? 0) + 1;
-      if (retriable && cfg.__retries <= 3) {
-        const backoff = 200 * Math.pow(2, cfg.__retries);
-        await new Promise(res => setTimeout(res, backoff));
-        return instance.request(cfg);
+
+      config.__retryCount = (config.__retryCount ?? 0) + 1;
+      if (config.__retryCount > MAX_RETRIES) {
+        throw error;
       }
-      return Promise.reject(err);
+
+      const delayMs = computeRetryDelay(error, config.__retryCount);
+      await delay(delayMs);
+      return instance.request(config);
     }
   );
+
   return instance;
 }
 
-export const acessoriasClient = newClient();
+export const acessoriasClient = createClient();
 
-async function getPage<T>(resource: string, page: number, qs: Record<string, any> = {}): Promise<T[]> {
-  const url = buildUrl(resource, { Pagina: page, ...qs });
-  const { data } = await acessoriasClient.get(url);
-  if (Array.isArray(data)) return data as T[];
-  if (data?.data && Array.isArray(data.data)) return data.data as T[];
-  return [];
+export type PageParams = Record<string, string | number | undefined>;
+
+export function buildUrl(path: string): string {
+  return path.startsWith("/") ? path : `/${path}`;
 }
 
-export async function listAllCompanies(qs: Record<string, any> = {}): Promise<Company[]> {
-  const out: Company[] = [];
-  for (let p = 1; p <= 9999; p++) {
-    const page = await getPage<Company>('/companies', p, qs);
-    if (page.length === 0) break;
-    out.push(...page);
+export async function paginate<T>(path: string, params: PageParams = {}): Promise<T[]> {
+  const output: T[] = [];
+  let pagina = Number(params?.Pagina ?? 1);
+
+  for (;;) {
+    const { data } = await acessoriasClient.get<T[]>(buildUrl(path), {
+      params: { ...params, Pagina: pagina },
+    });
+
+    if (!data || data.length === 0) {
+      break;
+    }
+
+    output.push(...data);
+    pagina += 1;
   }
-  return out;
+
+  return output;
 }
 
-export async function listAllProcesses(qs: Record<string, any> = {}): Promise<Process[]> {
-  const out: Process[] = [];
-  for (let p = 1; p <= 9999; p++) {
-    const page = await getPage<Process>('/processes', p, qs);
-    if (page.length === 0) break;
-    out.push(...page);
-  }
-  return out;
+export interface CompanyListOptions {
+  pagina?: number;
+  withObligations?: boolean;
 }
 
-export async function getProcessById(id: string|number): Promise<Process|null> {
-  const url = buildUrl(`/processes/${id}`);
-  const { data } = await acessoriasClient.get(url);
-  return data ?? null;
+export async function listCompanies(options: CompanyListOptions = {}): Promise<Record<string, unknown>[]> {
+  const { pagina = 1, withObligations = false } = options;
+  return paginate<Record<string, unknown>>("/companies/ListAll", {
+    Pagina: pagina,
+    obligations: withObligations ? "true" : undefined,
+  });
 }
 
-export async function listDeliveriesByProcess(processId: string|number, paramName = 'ProcessoId'): Promise<Delivery[]> {
-  const all: Delivery[] = [];
-  for (let p = 1; p <= 9999; p++) {
-    const url = buildUrl('/deliveries', { [paramName]: processId, Pagina: p });
-    const { data } = await acessoriasClient.get(url);
-    const arr = Array.isArray(data) ? data : (data?.data ?? []);
-    if (!arr?.length) break;
-    all.push(...arr);
-  }
-  return all;
+export async function getCompany(identificador: string): Promise<Record<string, unknown>> {
+  const { data } = await acessoriasClient.get<Record<string, unknown>>(buildUrl(`/companies/${identificador}`));
+  return data;
 }
 
-export async function listCompanies(params: Record<string, any> = {}): Promise<Company[]> {
-  return listAllCompanies(params);
+export interface ProcessListFilters extends PageParams {
+  ProcStatus?: string;
+  ProcNome?: string;
+  ProcInicio?: string;
+  ProcConclusao?: string;
 }
 
-export async function listProcesses(params: Record<string, any> = {}): Promise<Process[]> {
-  return listAllProcesses(params);
+export async function listProcesses(filters: ProcessListFilters = {}): Promise<Record<string, unknown>[]> {
+  const params: PageParams = { ...filters };
+  return paginate<Record<string, unknown>>("/processes/ListAll", params);
 }
 
-export async function listDeliveries(params: Record<string, any> = {}): Promise<Delivery[]> {
-  const paramName = params.paramName ?? params.param ?? 'ProcessoId';
-  const processId =
-    params.processId ??
-    params.processoId ??
-    params.ProcessoId ??
-    (paramName && params[paramName]);
-  if (processId === undefined || processId === null || processId === '') {
-    return [];
-  }
-  return listDeliveriesByProcess(processId, paramName);
+export async function getProcess(procId: string): Promise<Record<string, unknown>> {
+  const { data } = await acessoriasClient.get<Record<string, unknown>>(buildUrl(`/processes/${procId}`));
+  return data;
+}
+
+export interface DeliveriesListFilters extends PageParams {
+  DtInitial: string;
+  DtFinal: string;
+  DtLastDH?: string;
+}
+
+export async function listDeliveries(
+  identificador: string,
+  dtInitial: string,
+  dtFinal: string,
+  dtLastDH?: string
+): Promise<Record<string, unknown>[]> {
+  const params: DeliveriesListFilters = {
+    DtInitial: dtInitial,
+    DtFinal: dtFinal,
+    DtLastDH: dtLastDH,
+  };
+
+  return paginate<Record<string, unknown>>(`/deliveries/${identificador}`, params);
 }
