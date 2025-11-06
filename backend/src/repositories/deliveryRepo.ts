@@ -1,7 +1,7 @@
 import { Delivery } from "@prisma/client";
-import { logger } from "../lib/logger.js";
-import { prisma } from "../lib/prisma.js";
-import { ensureStringId, pickDate, pickString, stringifyJson } from "./helpers.js";
+import { logger } from "../lib/logger";
+import { prisma } from "../lib/prisma";
+import { ensureStringId, pickDate, pickString, stringifyJson } from "./helpers";
 
 export type RawDelivery = Record<string, unknown>;
 

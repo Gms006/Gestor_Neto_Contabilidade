@@ -1,4 +1,4 @@
-import { prisma } from "../lib/prisma.js";
+import { prisma } from "../lib/prisma";
 
 export async function getCursor(resource: string): Promise<{ cursor: string | null; lastRunAt: Date | null }> {
   const row = await prisma.syncCursor.findUnique({ where: { resource } });

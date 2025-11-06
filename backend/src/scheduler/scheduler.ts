@@ -1,7 +1,7 @@
 // src/scheduler/scheduler.ts
 import cron, { ScheduledTask } from "node-cron";
-import { logger } from "../lib/logger.js";
-import { syncAll } from "../services/syncService.js";
+import { logger } from "../lib/logger";
+import { syncAll } from "../services/syncService";
 
 let task: ScheduledTask | null = null;
 
