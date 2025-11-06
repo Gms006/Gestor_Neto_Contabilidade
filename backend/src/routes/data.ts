@@ -17,15 +17,18 @@ const STATUS_QUERY_TO_NORMALIZED: Record<string, string | undefined> = {
 
 dataRouter.get("/processes", async (req, res) => {
   try {
-    const statusQuery = typeof req.query.status === "string" ? req.query.toLowerCase() : "all";
+    const statusQuery =
+      typeof req.query.status === "string" ? req.query.status.toLowerCase() : "all";
     const statusNormalized = STATUS_QUERY_TO_NORMALIZED[statusQuery] ?? undefined;
 
     const page = Math.max(1, Number(req.query.page ?? 1));
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize ?? 20)));
     const skip = (page - 1) * pageSize;
 
-    const empresa = typeof req.query.empresa === "string" ? req.query.trim() : undefined;
-    const titulo = typeof req.query.titulo === "string" ? req.query.trim() : undefined;
+    const empresa =
+      typeof req.query.empresa === "string" ? req.query.empresa.trim() : undefined;
+    const titulo =
+      typeof req.query.titulo === "string" ? req.query.titulo.trim() : undefined;
     const sortParam = typeof req.query.sort === "string" ? req.query.sort.toLowerCase() : "desc";
     const sort: "asc" | "desc" = sortParam === "asc" ? "asc" : "desc";
 

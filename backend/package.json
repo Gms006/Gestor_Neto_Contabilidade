@@ -11,9 +11,9 @@
   },
   "scripts": {
     "dev": "cross-env TS_NODE_PROJECT=tsconfig.json ts-node-dev --respawn --transpile-only src/server.ts",
-    "dump:proc:all": "ts-node src/tools/dumpProcesses.ts --status=ALL",
-    "dump:proc:open": "ts-node src/tools/dumpProcesses.ts --status=OPEN",
-    "dump:proc:closed": "ts-node src/tools/dumpProcesses.ts --status=CLOSED",
+    "dump:proc:all": "cross-env TS_NODE_PROJECT=tsconfig.json ts-node src/tools/dumpProcesses.ts --status=ALL",
+    "dump:proc:open": "cross-env TS_NODE_PROJECT=tsconfig.json ts-node src/tools/dumpProcesses.ts --status=OPEN",
+    "dump:proc:closed": "cross-env TS_NODE_PROJECT=tsconfig.json ts-node src/tools/dumpProcesses.ts --status=CLOSED",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "prisma": "prisma",

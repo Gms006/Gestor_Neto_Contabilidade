@@ -16,7 +16,11 @@ export type SyncOptions = {
 };
 
 const SAFETY_DAYS = 1;
-const DEFAULT_MONTHS_HISTORY = 6;
+const DEFAULT_MONTHS_HISTORY = (() => {
+  const raw = process.env.SYNC_MONTHS_HISTORY;
+  const parsed = raw ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 6;
+})();
 
 function resolveStatuses(input?: string[] | "ALL"): string[] {
   if (!input || input === "ALL") {
@@ -68,6 +72,7 @@ async function syncProcesses(opts: SyncOptions): Promise<number> {
     const filters: Record<string, string> = { ProcStatus: status };
     if (sinceDate) {
       filters.ProcInicio = sinceDate;
+      filters.ProcConclusao = fmtDate(new Date());
     }
 
     logger.info({ resource: "processes", status, filters }, "Listando processos");

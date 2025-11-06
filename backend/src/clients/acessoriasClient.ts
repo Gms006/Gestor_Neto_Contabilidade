@@ -92,8 +92,27 @@ export const acessoriasClient = createClient();
 
 export type PageParams = Record<string, string | number | undefined>;
 
-export function buildUrl(path: string): string {
+function ensureLeadingSlash(path: string): string {
   return path.startsWith("/") ? path : `/${path}`;
+}
+
+function ensureTrailingSlash(path: string): string {
+  return path.endsWith("/") ? path : `${path}/`;
+}
+
+function normalizeIdentifier(identifier?: string | null): string {
+  const trimmed = identifier?.trim();
+  if (!trimmed) {
+    return "ListAll";
+  }
+  if (/^listall$/i.test(trimmed)) {
+    return "ListAll";
+  }
+  return trimmed;
+}
+
+export function buildUrl(path: string): string {
+  return ensureLeadingSlash(path);
 }
 
 export async function paginate<T>(path: string, params: PageParams = {}): Promise<T[]> {
@@ -101,7 +120,7 @@ export async function paginate<T>(path: string, params: PageParams = {}): Promis
   let pagina = Number(params?.Pagina ?? 1);
 
   for (;;) {
-    const { data } = await acessoriasClient.get<T[]>(buildUrl(path), {
+    const { data } = await acessoriasClient.get<T[]>(ensureLeadingSlash(path), {
       params: { ...params, Pagina: pagina },
     });
 
@@ -119,18 +138,25 @@ export async function paginate<T>(path: string, params: PageParams = {}): Promis
 export interface CompanyListOptions {
   pagina?: number;
   withObligations?: boolean;
+  identificador?: string;
 }
 
 export async function listCompanies(options: CompanyListOptions = {}): Promise<Record<string, unknown>[]> {
-  const { pagina = 1, withObligations = false } = options;
-  return paginate<Record<string, unknown>>("/companies/ListAll", {
+  const { pagina = 1, withObligations = false, identificador } = options;
+  const path = ensureTrailingSlash(`/companies/${normalizeIdentifier(identificador)}`);
+  return paginate<Record<string, unknown>>(path, {
     Pagina: pagina,
     obligations: withObligations ? "true" : undefined,
   });
 }
 
 export async function getCompany(identificador: string): Promise<Record<string, unknown>> {
-  const { data } = await acessoriasClient.get<Record<string, unknown>>(buildUrl(`/companies/${identificador}`));
+  const trimmed = identificador.trim();
+  if (!trimmed) {
+    throw new Error("Identificador da empresa é obrigatório");
+  }
+  const path = ensureLeadingSlash(`/companies/${trimmed}`);
+  const { data } = await acessoriasClient.get<Record<string, unknown>>(ensureTrailingSlash(path));
   return data;
 }
 
@@ -141,13 +167,22 @@ export interface ProcessListFilters extends PageParams {
   ProcConclusao?: string;
 }
 
-export async function listProcesses(filters: ProcessListFilters = {}): Promise<Record<string, unknown>[]> {
-  const params: PageParams = { ...filters };
-  return paginate<Record<string, unknown>>("/processes/ListAll", params);
+export async function listProcesses(
+  filters: ProcessListFilters = {},
+  procIdPattern = "*"
+): Promise<Record<string, unknown>[]> {
+  const normalizedPattern = normalizeIdentifier(procIdPattern).replace(/^ListAll$/i, "*");
+  const path = ensureTrailingSlash(`/processes/${normalizedPattern}`);
+  return paginate<Record<string, unknown>>(path, { ...filters });
 }
 
 export async function getProcess(procId: string): Promise<Record<string, unknown>> {
-  const { data } = await acessoriasClient.get<Record<string, unknown>>(buildUrl(`/processes/${procId}`));
+  const trimmed = procId.trim();
+  if (!trimmed) {
+    throw new Error("Identificador do processo é obrigatório");
+  }
+  const path = ensureLeadingSlash(`/processes/${trimmed}`);
+  const { data } = await acessoriasClient.get<Record<string, unknown>>(ensureTrailingSlash(path));
   return data;
 }
 
@@ -158,16 +193,22 @@ export interface DeliveriesListFilters extends PageParams {
 }
 
 export async function listDeliveries(
-  identificador: string,
+  identificador: string | undefined,
   dtInitial: string,
   dtFinal: string,
   dtLastDH?: string
 ): Promise<Record<string, unknown>[]> {
+  const resolvedIdentifier = normalizeIdentifier(identificador);
+  if (resolvedIdentifier === "ListAll" && !dtLastDH) {
+    throw new Error("DtLastDH é obrigatório quando o identificador é ListAll");
+  }
+
   const params: DeliveriesListFilters = {
     DtInitial: dtInitial,
     DtFinal: dtFinal,
     DtLastDH: dtLastDH,
   };
 
-  return paginate<Record<string, unknown>>(`/deliveries/${identificador}`, params);
+  const path = ensureTrailingSlash(`/deliveries/${resolvedIdentifier}`);
+  return paginate<Record<string, unknown>>(path, params);
 }

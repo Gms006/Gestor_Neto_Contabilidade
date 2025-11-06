@@ -24,6 +24,26 @@
   "ts-node": {
     "transpileOnly": true
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "tests"]
+  "include": [
+    "src/server.ts",
+    "src/clients/**/*.ts",
+    "src/lib/**/*.ts",
+    "src/repositories/**/*.ts",
+    "src/routes/**/*.ts",
+    "src/scheduler/**/*.ts",
+    "src/services/**/*.ts",
+    "src/tools/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "tests",
+    "src/controllers",
+    "src/flows",
+    "src/jobs",
+    "src/app.ts",
+    "src/services/obrigacoes.service.ts",
+    "src/services/whatsapp.service.ts",
+    "src/types"
+  ]
 }
