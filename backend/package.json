@@ -10,7 +10,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "dev": "cross-env NODE_ENV=development tsx watch src/server.ts",
+    "dev": "cross-env NODE_ENV=development TS_NODE_PROJECT=tsconfig.json TS_NODE_EXPERIMENTAL_SPECIFIER_RESOLUTION=node node --loader ts-node/esm --no-warnings src/server.ts",
     "dump:proc:all": "tsx src/tools/dumpProcesses.ts --status=ALL",
     "dump:proc:open": "tsx src/tools/dumpProcesses.ts --status=OPEN",
     "dump:proc:closed": "tsx src/tools/dumpProcesses.ts --status=CLOSED",
@@ -47,6 +47,7 @@
     "prettier": "^3.2.5",
     "prisma": "^5.22.0",
     "tsx": "^4.19.1",
+    "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   }
 }

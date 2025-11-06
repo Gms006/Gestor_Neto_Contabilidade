@@ -1,7 +1,7 @@
 import { Company } from "@prisma/client";
-import { prisma } from "../lib/prisma";
-import { logger } from "../lib/logger";
-import { ensureStringId, pickString, serializeValue, stringifyJson } from "./helpers";
+import { prisma } from "../lib/prisma.js";
+import { logger } from "../lib/logger.js";
+import { ensureStringId, pickString, serializeValue, stringifyJson } from "./helpers.js";
 
 export type RawCompany = Record<string, unknown>;
 
@@ -131,4 +131,13 @@ export async function upsertCompaniesBatch(companies: RawCompany[]): Promise<num
 
 export async function findCompanyByExternalId(externalId: string): Promise<Company | null> {
   return prisma.company.findUnique({ where: { externalId } });
+}
+
+export async function listCompanyExternalIds(): Promise<string[]> {
+  const rows = await prisma.company.findMany({
+    select: { externalId: true },
+  });
+  return rows
+    .map(({ externalId }) => externalId.trim())
+    .filter((value) => value.length > 0);
 }

@@ -1,214 +1,110 @@
-import axios, { AxiosError, AxiosInstance } from "axios";
+import axios, { AxiosInstance } from 'axios';
 
-const BASE_URL = process.env.ACESSORIAS_API_BASE ?? "https://api.acessorias.com";
-const TOKEN = process.env.ACESSORIAS_TOKEN ?? "";
+const BASE = process.env.ACESSORIAS_API_BASE || 'https://api.acessorias.com';
+const TOKEN = process.env.ACESSORIAS_API_TOKEN || process.env.ACESSORIAS_TOKEN || '';
 
-const MAX_REQUESTS_PER_MINUTE = 100;
-const MIN_INTERVAL_MS = Math.ceil(60000 / MAX_REQUESTS_PER_MINUTE);
-const MAX_RETRIES = 5;
-const BASE_RETRY_DELAY_MS = 500;
+export const acessoriasHttp: AxiosInstance = axios.create({
+  baseURL: BASE,
+  timeout: 30000,
+  headers: {
+    'User-Agent': 'NetoContabilidade-Gestor/1.0',
+    ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
+  },
+});
 
-const defaultHeaders: Record<string, string> = {
-  "User-Agent": "NetoContabilidade-Gestor/1.0",
-  Accept: "application/json",
-};
+type Res<T> = { data: T };
 
-if (TOKEN) {
-  defaultHeaders["Authorization"] = `Bearer ${TOKEN}`;
+type Resource = 'companies' | 'processes' | 'deliveries';
+
+type QueryValue = string | number | boolean | undefined;
+
+type QueryParams = Record<string, QueryValue>;
+
+export function buildUrl(
+  resource: Resource,
+  opts: { ident?: string; query?: QueryParams } = {}
+): string {
+  const ident = opts.ident ? `/${encodeURIComponent(opts.ident)}/` : '/';
+  const query = opts.query ?? {};
+  const definedEntries = Object.entries(query).filter(([, value]) => value !== undefined && value !== null);
+  const qs = definedEntries.length
+    ? `?${new URLSearchParams(definedEntries.map(([k, v]) => [k, String(v)])).toString()}`
+    : '';
+  return `/${resource}${ident}${qs}`.replace(/\/+/g, '/').replace(/\/?\?/, '?');
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-let rateLimiter: Promise<void> = Promise.resolve();
-let nextAvailableAt = Date.now();
-
-function applyRateLimit(): Promise<void> {
-  rateLimiter = rateLimiter.then(async () => {
-    const now = Date.now();
-    const waitFor = Math.max(0, nextAvailableAt - now);
-    if (waitFor > 0) {
-      await delay(waitFor);
-    }
-    const jitter = Math.random() * 50;
-    nextAvailableAt = Date.now() + MIN_INTERVAL_MS + jitter;
-  });
-  return rateLimiter;
-}
-
-function shouldRetry(error: AxiosError): boolean {
-  const status = error.response?.status ?? 0;
-  return status === 429 || (status >= 500 && status < 600);
-}
-
-function computeRetryDelay(error: AxiosError, attempt: number): number {
-  const retryAfterHeader = error.response?.headers?.["retry-after"];
-  if (retryAfterHeader) {
-    const retryAfterSeconds = Number(retryAfterHeader);
-    if (!Number.isNaN(retryAfterSeconds) && retryAfterSeconds > 0) {
-      return retryAfterSeconds * 1000;
-    }
-  }
-  const baseDelay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
-  const jitter = Math.random() * 250;
-  return baseDelay + jitter;
-}
-
-function createClient(): AxiosInstance {
-  const instance = axios.create({
-    baseURL: BASE_URL,
-    headers: defaultHeaders,
-  });
-
-  instance.interceptors.request.use(async (config) => {
-    await applyRateLimit();
-    return config;
-  });
-
-  instance.interceptors.response.use(
-    (response) => response,
-    async (error: AxiosError) => {
-      const config: any = error.config ?? {};
-      if (!config || !shouldRetry(error)) {
-        throw error;
+export async function fetchWithRetry<T>(url: string, tries = 3, waitMs = 250): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= tries; attempt += 1) {
+    try {
+      const response: Res<T> = await acessoriasHttp.get(url);
+      return response.data;
+    } catch (err) {
+      lastErr = err;
+      if (attempt === tries) {
+        break;
       }
-
-      config.__retryCount = (config.__retryCount ?? 0) + 1;
-      if (config.__retryCount > MAX_RETRIES) {
-        throw error;
-      }
-
-      const delayMs = computeRetryDelay(error, config.__retryCount);
-      await delay(delayMs);
-      return instance.request(config);
+      const jitter = Math.floor(Math.random() * waitMs);
+      await new Promise((resolve) => setTimeout(resolve, waitMs + jitter));
     }
-  );
-
-  return instance;
-}
-
-export const acessoriasClient = createClient();
-
-export type PageParams = Record<string, string | number | undefined>;
-
-function ensureLeadingSlash(path: string): string {
-  return path.startsWith("/") ? path : `/${path}`;
-}
-
-function ensureTrailingSlash(path: string): string {
-  return path.endsWith("/") ? path : `${path}/`;
-}
-
-function normalizeIdentifier(identifier?: string | null): string {
-  const trimmed = identifier?.trim();
-  if (!trimmed) {
-    return "ListAll";
   }
-  if (/^listall$/i.test(trimmed)) {
-    return "ListAll";
-  }
-  return trimmed;
+  throw lastErr;
 }
 
-export function buildUrl(path: string): string {
-  return ensureLeadingSlash(path);
-}
-
-export async function paginate<T>(path: string, params: PageParams = {}): Promise<T[]> {
-  const output: T[] = [];
-  let pagina = Number(params?.Pagina ?? 1);
-
-  for (;;) {
-    const { data } = await acessoriasClient.get<T[]>(ensureLeadingSlash(path), {
-      params: { ...params, Pagina: pagina },
-    });
-
+export async function fetchAllPages<T>(makeUrl: (page: number) => string): Promise<T[]> {
+  const result: T[] = [];
+  for (let page = 1; ; page += 1) {
+    const url = makeUrl(page);
+    const data = await fetchWithRetry<T[]>(url);
     if (!data || data.length === 0) {
       break;
     }
-
-    output.push(...data);
-    pagina += 1;
+    result.push(...data);
   }
-
-  return output;
+  return result;
 }
 
-export interface CompanyListOptions {
-  pagina?: number;
-  withObligations?: boolean;
-  identificador?: string;
-}
-
-export async function listCompanies(options: CompanyListOptions = {}): Promise<Record<string, unknown>[]> {
-  const { pagina = 1, withObligations = false, identificador } = options;
-  const path = ensureTrailingSlash(`/companies/${normalizeIdentifier(identificador)}`);
-  return paginate<Record<string, unknown>>(path, {
-    Pagina: pagina,
-    obligations: withObligations ? "true" : undefined,
-  });
-}
-
-export async function getCompany(identificador: string): Promise<Record<string, unknown>> {
-  const trimmed = identificador.trim();
-  if (!trimmed) {
-    throw new Error("Identificador da empresa é obrigatório");
-  }
-  const path = ensureLeadingSlash(`/companies/${trimmed}`);
-  const { data } = await acessoriasClient.get<Record<string, unknown>>(ensureTrailingSlash(path));
-  return data;
-}
-
-export interface ProcessListFilters extends PageParams {
-  ProcStatus?: string;
-  ProcNome?: string;
-  ProcInicio?: string;
-  ProcConclusao?: string;
+export async function fetchResource<T>(resource: Resource, ident: string): Promise<T> {
+  const url = buildUrl(resource, { ident });
+  return fetchWithRetry<T>(url);
 }
 
 export async function listProcesses(
-  filters: ProcessListFilters = {},
-  procIdPattern = "*"
+  query: Record<string, QueryValue> = {}
 ): Promise<Record<string, unknown>[]> {
-  const normalizedPattern = normalizeIdentifier(procIdPattern).replace(/^ListAll$/i, "*");
-  const path = ensureTrailingSlash(`/processes/${normalizedPattern}`);
-  return paginate<Record<string, unknown>>(path, { ...filters });
+  return fetchAllPages<Record<string, unknown>>((page) =>
+    buildUrl('processes', {
+      ident: 'ListAll',
+      query: { ...query, Pagina: page },
+    })
+  );
 }
 
-export async function getProcess(procId: string): Promise<Record<string, unknown>> {
-  const trimmed = procId.trim();
-  if (!trimmed) {
-    throw new Error("Identificador do processo é obrigatório");
+export async function getProcess(ident: string): Promise<Record<string, unknown>> {
+  if (!ident.trim()) {
+    throw new Error('Identificador do processo é obrigatório');
   }
-  const path = ensureLeadingSlash(`/processes/${trimmed}`);
-  const { data } = await acessoriasClient.get<Record<string, unknown>>(ensureTrailingSlash(path));
-  return data;
-}
-
-export interface DeliveriesListFilters extends PageParams {
-  DtInitial: string;
-  DtFinal: string;
-  DtLastDH?: string;
+  return fetchResource<Record<string, unknown>>('processes', ident.trim());
 }
 
 export async function listDeliveries(
-  identificador: string | undefined,
+  ident: string,
   dtInitial: string,
   dtFinal: string,
-  dtLastDH?: string
+  dtLastDh?: string
 ): Promise<Record<string, unknown>[]> {
-  const resolvedIdentifier = normalizeIdentifier(identificador);
-  if (resolvedIdentifier === "ListAll" && !dtLastDH) {
-    throw new Error("DtLastDH é obrigatório quando o identificador é ListAll");
+  if (!ident.trim()) {
+    throw new Error('Identificador é obrigatório para listar entregas');
   }
-
-  const params: DeliveriesListFilters = {
-    DtInitial: dtInitial,
-    DtFinal: dtFinal,
-    DtLastDH: dtLastDH,
-  };
-
-  const path = ensureTrailingSlash(`/deliveries/${resolvedIdentifier}`);
-  return paginate<Record<string, unknown>>(path, params);
+  return fetchAllPages<Record<string, unknown>>((page) =>
+    buildUrl('deliveries', {
+      ident: ident.trim(),
+      query: {
+        Pagina: page,
+        DtInitial: dtInitial,
+        DtFinal: dtFinal,
+        ...(dtLastDh ? { DtLastDH: dtLastDh } : {}),
+      },
+    })
+  );
 }

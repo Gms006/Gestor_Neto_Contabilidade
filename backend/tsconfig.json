@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ES2022",
-    "moduleResolution": "Bundler",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "strict": true,
@@ -16,5 +16,8 @@
     }
   },
   "include": ["src"],
-  "exclude": ["node_modules", "dist", "tests", "src/controllers", "src/flows", "src/jobs", "src/app.ts", "src/services/obrigacoes.service.ts", "src/services/whatsapp.service.ts", "src/types", "src/utils/dates.ts"]
+  "exclude": ["node_modules", "dist", "tests", "src/controllers", "src/flows", "src/jobs", "src/app.ts", "src/services/obrigacoes.service.ts", "src/services/whatsapp.service.ts", "src/types", "src/utils/dates.ts"],
+  "ts-node": {
+    "experimentalSpecifierResolution": "node"
+  }
 }

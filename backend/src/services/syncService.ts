@@ -1,168 +1,224 @@
-import { endOfMonth, startOfMonth, subDays, subMonths } from "date-fns";
-import { getProcess, listCompanies, listDeliveries, listProcesses } from "../clients/acessoriasClient";
-import { fmtDate, fmtDH } from "../lib/date";
-import { logger } from "../lib/logger";
-import { prisma } from "../lib/prisma";
-import { upsertCompaniesBatch } from "../repositories/companyRepo";
-import { upsertDeliveriesBatch } from "../repositories/deliveryRepo";
-import { resolveProcessExternalId, upsertProcessesBatch } from "../repositories/processRepo";
-import { getCursor, setCursor, touchCursor } from "../repositories/syncCursorRepo";
+import { endOfDay, format, startOfDay, subMonths } from 'date-fns';
+import { buildUrl, fetchAllPages, fetchWithRetry } from '../clients/acessoriasClient.js';
+import { logger } from '../lib/logger.js';
+import {
+  listCompanyExternalIds,
+  upsertCompaniesBatch,
+} from '../repositories/companyRepo.js';
+import { upsertDeliveriesBatch } from '../repositories/deliveryRepo.js';
+import {
+  resolveProcessExternalId,
+  upsertProcessesBatch,
+} from '../repositories/processRepo.js';
+import { pickDate } from '../repositories/helpers.js';
+import { getCursor, setCursor, touchCursor } from '../repositories/syncCursorRepo.js';
+
+type Raw = Record<string, unknown>;
 
 export type SyncOptions = {
   full?: boolean;
   monthsHistory?: number;
-  statuses?: string[] | "ALL";
+  statuses?: string[] | 'ALL';
   includeDeliveries?: boolean;
 };
 
-const SAFETY_DAYS = 1;
+const LAST_DH_FIELDS = ['DtLastDH', 'dtLastDH', 'LastDH', 'lastDh'];
 const DEFAULT_MONTHS_HISTORY = (() => {
   const raw = process.env.SYNC_MONTHS_HISTORY;
   const parsed = raw ? Number(raw) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 6;
 })();
 
-function resolveStatuses(input?: string[] | "ALL"): string[] {
-  if (!input || input === "ALL") {
-    return ["A", "C"];
-  }
-  const list = Array.isArray(input) ? input : [input];
-  return Array.from(
-    new Set(
-      list
-        .map((value) => value.trim().toUpperCase())
-        .filter((value) => value.length > 0)
-    )
-  );
+function extractLastDh(payload: Raw): Date | null {
+  return pickDate(LAST_DH_FIELDS.map((field) => payload[field]));
 }
 
-function computeSinceDate(full: boolean, monthsHistory: number, cursor: string | null): string | null {
+function resolveMonthsHistory(full?: boolean, monthsHistory?: number) {
   if (full) {
-    return null;
+    return monthsHistory ?? DEFAULT_MONTHS_HISTORY;
   }
-  if (cursor) {
-    const parsed = new Date(cursor);
-    if (!Number.isNaN(parsed.getTime())) {
-      const safeDate = subDays(parsed, SAFETY_DAYS);
-      return fmtDate(safeDate);
+  if (Number.isFinite(monthsHistory) && monthsHistory && monthsHistory > 0) {
+    return monthsHistory;
+  }
+  return DEFAULT_MONTHS_HISTORY;
+}
+
+const STATUS_MAP: Record<string, 'inprogress' | 'concluded'> = {
+  a: 'inprogress',
+  aberto: 'inprogress',
+  open: 'inprogress',
+  inprogress: 'inprogress',
+  andamento: 'inprogress',
+  em_andamento: 'inprogress',
+  c: 'concluded',
+  concluido: 'concluded',
+  concluded: 'concluded',
+  closed: 'concluded',
+};
+
+function resolveStatuses(input?: string[] | 'ALL'): ('inprogress' | 'concluded')[] {
+  if (!input || input === 'ALL') {
+    return ['inprogress', 'concluded'];
+  }
+  const list = Array.isArray(input) ? input : [input];
+  const set = new Set<'inprogress' | 'concluded'>();
+  for (const value of list) {
+    const key = value?.toString().trim().toLowerCase();
+    if (!key) continue;
+    const mapped = STATUS_MAP[key];
+    if (mapped) {
+      set.add(mapped);
     }
   }
-  const fallback = subMonths(new Date(), monthsHistory);
-  return fmtDate(fallback);
+  if (set.size === 0) {
+    return ['inprogress', 'concluded'];
+  }
+  return Array.from(set);
 }
 
 async function syncCompanies(): Promise<number> {
-  logger.info({ resource: "companies" }, "Iniciando sincronização de empresas");
-  const companies = await listCompanies({ withObligations: true });
-  const count = await upsertCompaniesBatch(companies);
-  await touchCursor("companies");
-  logger.info({ resource: "companies", count }, "Sincronização de empresas concluída");
-  return count;
-}
-
-async function syncProcesses(opts: SyncOptions): Promise<number> {
-  const { full = false, monthsHistory = DEFAULT_MONTHS_HISTORY } = opts;
-  const statuses = resolveStatuses(opts.statuses);
-  const { cursor } = await getCursor("processes");
-  const sinceDate = computeSinceDate(full, monthsHistory, cursor);
-
-  let total = 0;
-
-  for (const status of statuses) {
-    const filters: Record<string, string> = { ProcStatus: status };
-    if (sinceDate) {
-      filters.ProcInicio = sinceDate;
-      filters.ProcConclusao = fmtDate(new Date());
-    }
-
-    logger.info({ resource: "processes", status, filters }, "Listando processos");
-    const summaries = await listProcesses(filters);
-    const detailsMap = new Map<string, Record<string, unknown> | null>();
-
-    for (const summary of summaries) {
-      const externalId = resolveProcessExternalId(summary);
-      if (!externalId) {
-        logger.warn({ summary }, "Resumo de processo sem identificador externo");
-        continue;
-      }
-
-      try {
-        const detail = await getProcess(externalId);
-        detailsMap.set(externalId, detail);
-      } catch (error) {
-        logger.error({ err: (error as Error).message, externalId }, "Falha ao obter detalhes do processo");
-        detailsMap.set(externalId, null);
-      }
-    }
-
-    const { processes } = await upsertProcessesBatch(summaries, detailsMap);
-    total += processes;
-    logger.info({ resource: "processes", status, batch: summaries.length, persisted: processes }, "Processos sincronizados");
-  }
-
-  await setCursor("processes", new Date().toISOString(), new Date());
-  logger.info({ resource: "processes", total }, "Sincronização de processos concluída");
+  logger.info({ resource: 'companies' }, 'Sincronização de empresas iniciada');
+  const companies = await fetchAllPages<Raw>((page: number) =>
+    buildUrl('companies', { ident: 'ListAll', query: { Pagina: page } })
+  );
+  const total = await upsertCompaniesBatch(companies);
+  await touchCursor('companies');
+  logger.info({ resource: 'companies', total }, 'Sincronização de empresas concluída');
   return total;
 }
 
-async function syncDeliveries(opts: SyncOptions): Promise<number> {
-  if (!opts.includeDeliveries) {
-    return 0;
-  }
-
-  const { full = false, monthsHistory = DEFAULT_MONTHS_HISTORY } = opts;
-  const now = new Date();
-  const rangeStart = full ? subMonths(startOfMonth(now), monthsHistory) : startOfMonth(now);
-  const rangeEnd = endOfMonth(now);
-
-  const dtInitial = fmtDate(rangeStart);
-  const dtFinal = fmtDate(rangeEnd);
-
-  const { cursor } = await getCursor("deliveries");
-  const lastDh = !full && cursor ? fmtDH(subDays(new Date(cursor), SAFETY_DAYS)) : undefined;
-
-  const companies = await prisma.company.findMany({ select: { externalId: true } });
-  let total = 0;
-
-  for (const company of companies) {
-    if (!company.externalId) continue;
+async function fetchProcessDetails(summaries: Raw[]): Promise<Map<string, Raw | null>> {
+  const details = new Map<string, Raw | null>();
+  for (const summary of summaries) {
+    const externalId = resolveProcessExternalId(summary);
+    if (!externalId) {
+      continue;
+    }
     try {
-      const deliveries = await listDeliveries(company.externalId, dtInitial, dtFinal, lastDh);
-      const processed = await upsertDeliveriesBatch(company.externalId, deliveries);
-      total += processed;
-      logger.info(
-        { resource: "deliveries", company: company.externalId, processed },
-        "Entregas sincronizadas"
-      );
+      const detail = await fetchWithRetry<Raw>(buildUrl('processes', { ident: externalId }));
+      details.set(externalId, detail);
     } catch (error) {
-      logger.error(
-        { err: (error as Error).message, company: company.externalId },
-        "Falha ao sincronizar entregas da empresa"
-      );
+      logger.warn({ externalId, err: (error as Error).message }, 'Falha ao obter detalhes do processo');
+      details.set(externalId, null);
+    }
+  }
+  return details;
+}
+
+async function syncProcesses(opts: SyncOptions): Promise<number> {
+  const statuses = resolveStatuses(opts.statuses);
+  let totalPersisted = 0;
+  let latestDh: Date | null = null;
+
+  for (const status of statuses) {
+    const query = status ? { Pagina: 1, ProcStatus: status } : { Pagina: 1 };
+    logger.info({ resource: 'processes', status: status ?? 'all' }, 'Listando processos');
+    const processes = await fetchAllPages<Raw>((page: number) =>
+      buildUrl('processes', {
+        ident: 'ListAll',
+        query: { ...query, Pagina: page },
+      })
+    );
+
+    if (processes.length === 0) {
+      continue;
+    }
+
+    const details = await fetchProcessDetails(processes);
+    const { processes: persisted } = await upsertProcessesBatch(processes, details);
+    totalPersisted += persisted;
+
+    for (const payload of processes) {
+      const candidate = extractLastDh(payload);
+      if (candidate && (!latestDh || candidate > latestDh)) {
+        latestDh = candidate;
+      }
+    }
+
+    for (const detail of details.values()) {
+      if (!detail) continue;
+      const candidate = extractLastDh(detail);
+      if (candidate && (!latestDh || candidate > latestDh)) {
+        latestDh = candidate;
+      }
     }
   }
 
-  await setCursor("deliveries", new Date().toISOString(), new Date());
-  logger.info({ resource: "deliveries", total }, "Sincronização de entregas concluída");
+  const cursorValue = latestDh ? latestDh.toISOString() : new Date().toISOString();
+  await setCursor('processes', cursorValue, new Date());
+  logger.info({ resource: 'processes', total: totalPersisted }, 'Sincronização de processos concluída');
+  return totalPersisted;
+}
+
+async function syncDeliveries(opts: SyncOptions): Promise<number> {
+  const includeDeliveries = opts.includeDeliveries ?? true;
+  if (!includeDeliveries) {
+    return 0;
+  }
+
+  const monthsHistory = resolveMonthsHistory(opts.full, opts.monthsHistory);
+  const now = new Date();
+  const dtInitial = format(startOfDay(subMonths(now, monthsHistory)), 'yyyy-MM-dd');
+  const dtFinal = format(endOfDay(now), 'yyyy-MM-dd');
+
+  const { cursor } = await getCursor('deliveries');
+  const lastDh = cursor ? new Date(cursor) : null;
+  const dtLastDhParam = lastDh ? format(lastDh, 'yyyy-MM-dd HH:mm:ss') : undefined;
+
+  const identifiers = await listCompanyExternalIds();
+  let total = 0;
+  let latestDh: Date | null = lastDh;
+
+  for (const ident of identifiers) {
+    if (!ident) continue;
+    logger.info({ resource: 'deliveries', ident }, 'Listando entregas');
+    const deliveries = await fetchAllPages<Raw>((page: number) =>
+      buildUrl('deliveries', {
+        ident,
+        query: {
+          Pagina: page,
+          DtInitial: dtInitial,
+          DtFinal: dtFinal,
+          ...(dtLastDhParam ? { DtLastDH: dtLastDhParam } : {}),
+        },
+      })
+    );
+
+    if (deliveries.length === 0) {
+      continue;
+    }
+
+    await upsertDeliveriesBatch(ident, deliveries);
+    total += deliveries.length;
+
+    for (const payload of deliveries) {
+      const candidate = extractLastDh(payload);
+      if (candidate && (!latestDh || candidate > latestDh)) {
+        latestDh = candidate;
+      }
+    }
+  }
+
+  const cursorValue = latestDh ? latestDh.toISOString() : new Date().toISOString();
+  await setCursor('deliveries', cursorValue, new Date());
+  logger.info({ resource: 'deliveries', total }, 'Sincronização de entregas concluída');
   return total;
 }
 
 export async function syncAll(opts: SyncOptions = {}) {
-  logger.info({ opts }, "Iniciando sincronização completa");
-
+  logger.info({ opts }, 'Iniciando sincronização completa');
   const companies = await syncCompanies();
   const processes = await syncProcesses(opts);
   const deliveries = await syncDeliveries(opts);
-
-  logger.info({ companies, processes, deliveries }, "Sincronização completa finalizada");
+  logger.info({ companies, processes, deliveries }, 'Sincronização completa finalizada');
   return { companies, processes, deliveries };
 }
 
 export async function getMeta() {
   const [companies, processes, deliveries] = await Promise.all([
-    getCursor("companies"),
-    getCursor("processes"),
-    getCursor("deliveries"),
+    getCursor('companies'),
+    getCursor('processes'),
+    getCursor('deliveries'),
   ]);
 
   return {

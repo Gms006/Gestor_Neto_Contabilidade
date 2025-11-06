@@ -1,9 +1,9 @@
-import { Company, Process } from "@prisma/client";
-import { mapProcessStatus } from "../lib/utils";
-import { logger } from "../lib/logger";
-import { prisma } from "../lib/prisma";
-import { upsertCompanyFromApi } from "./companyRepo";
-import { ensureStringId, pickDate, pickNumber, pickString, serializeValue, stringifyJson } from "./helpers";
+import { Company, Process, Prisma } from "@prisma/client";
+import { mapProcessStatus } from "../lib/utils.js";
+import { logger } from "../lib/logger.js";
+import { prisma } from "../lib/prisma.js";
+import { upsertCompanyFromApi } from "./companyRepo.js";
+import { ensureStringId, pickDate, pickNumber, pickString, serializeValue, stringifyJson } from "./helpers.js";
 
 export type RawProcess = Record<string, unknown>;
 
@@ -202,6 +202,10 @@ export async function upsertProcessFromApi(
     });
   }
 
+  if (!company) {
+    throw new Error(`Não foi possível resolver empresa ${companyExternalId}`);
+  }
+
   const title =
     (pickString(TITLE_FIELDS.map((field) => summary[field])) ??
       pickString(TITLE_FIELDS.map((field) => detail?.[field]))) ??
@@ -274,7 +278,7 @@ export async function upsertProcessFromApi(
 
 export async function upsertProcessesBatch(
   processes: RawProcess[],
-  detailsMap: Map<string, RawProcess | null>
+  detailsMap: Map<string, RawProcess | null> = new Map()
 ): Promise<{ processes: number }> {
   let count = 0;
   for (const summary of processes) {
@@ -292,43 +296,76 @@ export async function upsertProcessesBatch(
   return { processes: count };
 }
 
-export interface ProcessListParams {
-  status?: string;
-  companyExternalId?: string;
-  companyName?: string;
-  title?: string;
-  skip?: number;
-  take?: number;
-  sort?: "asc" | "desc";
+type StatusFilter = "concluido" | "em_andamento" | "todos" | undefined;
+
+function normalizeStatusFilter(status?: string): "CONCLUIDO" | "EM_ANDAMENTO" | undefined {
+  if (!status) return undefined;
+  const normalized = status.toLowerCase();
+  if (normalized === "concluido") return "CONCLUIDO";
+  if (normalized === "em_andamento") return "EM_ANDAMENTO";
+  return undefined;
 }
 
-export async function listProcessesWithFilters(params: ProcessListParams) {
-  const { status, companyExternalId, companyName, title, skip = 0, take = 20, sort = "desc" } = params;
+function resolveOrder(order?: string): Prisma.ProcessOrderByWithRelationInput {
+  const fallback: Prisma.ProcessOrderByWithRelationInput = { updatedAt: "desc" };
+  if (!order) return fallback;
+  const trimmed = order.trim();
+  if (!trimmed) return fallback;
+  const direction: Prisma.SortOrder = trimmed.startsWith("-") ? "desc" : "asc";
+  const field = trimmed.replace(/^[-+]/, "");
+  const allowed = new Set(["updatedAt", "createdAt", "startedAt", "finishedAt", "lastDh"]);
+  if (!allowed.has(field)) {
+    return fallback;
+  }
+  return { [field]: direction } as Prisma.ProcessOrderByWithRelationInput;
+}
 
-  const where: any = {};
-  if (status) {
-    where.statusNormalized = status;
-  }
-  if (companyExternalId) {
-    where.company = { externalId: companyExternalId };
-  }
-  if (companyName) {
-    where.company = {
-      ...(where.company ?? {}),
-      name: { contains: companyName, mode: "insensitive" },
-    };
-  }
-  if (title) {
-    where.title = { contains: title, mode: "insensitive" };
+export interface ListProcessesPagedOptions {
+  page: number;
+  size: number;
+  status?: StatusFilter;
+  empresa?: string;
+  titulo?: string;
+  order?: string;
+}
+
+export async function listProcessesPaged(options: ListProcessesPagedOptions) {
+  const page = Number.isFinite(options.page) ? Math.max(1, Math.floor(options.page)) : 1;
+  const size = Number.isFinite(options.size) ? Math.max(1, Math.min(200, Math.floor(options.size))) : 50;
+  const skip = (page - 1) * size;
+
+  const where: Prisma.ProcessWhereInput = {};
+  const normalizedStatus = normalizeStatusFilter(options.status);
+  if (normalizedStatus) {
+    where.statusNormalized = normalizedStatus;
   }
 
-  const orderBy = { updatedAt: sort } as const;
+  const companyFilters: Prisma.CompanyWhereInput = {};
+  const empresa = options.empresa?.trim();
+  if (empresa) {
+    const digits = empresa.replace(/\D+/g, "");
+    if (digits.length >= 8) {
+      companyFilters.externalId = digits;
+    } else {
+      companyFilters.name = { contains: empresa };
+    }
+  }
+  if (Object.keys(companyFilters).length > 0) {
+    where.company = companyFilters;
+  }
+
+  const titulo = options.titulo?.trim();
+  if (titulo) {
+    where.title = { contains: titulo };
+  }
+
+  const orderBy = resolveOrder(options.order);
 
   const [items, total] = await prisma.$transaction([
     prisma.process.findMany({
       where,
       skip,
-      take,
+      take: size,
       orderBy,
       include: {
         company: true,
@@ -338,22 +375,28 @@ export async function listProcessesWithFilters(params: ProcessListParams) {
     prisma.process.count({ where }),
   ]);
 
-  return { items, total };
+  return {
+    data: items,
+    page,
+    size,
+    total,
+    totalPages: Math.ceil(total / size) || 0,
+  };
 }
 
-export async function summarizeProcessesByStatus() {
+export async function countByStatus() {
   const groups = await prisma.process.groupBy({
     by: ["statusNormalized"],
-    _count: { statusNormalized: true },
+    _count: { _all: true },
   });
 
-  const summary = { concluidos: 0, em_andamento: 0, outros: 0 };
+  const summary = { concluido: 0, em_andamento: 0, outros: 0 };
 
   for (const group of groups) {
     const status = group.statusNormalized ?? "OUTRO";
-    const count = group._count.statusNormalized;
+    const count = group._count._all;
     if (status === "CONCLUIDO") {
-      summary.concluidos += count;
+      summary.concluido += count;
     } else if (status === "EM_ANDAMENTO") {
       summary.em_andamento += count;
     } else {
