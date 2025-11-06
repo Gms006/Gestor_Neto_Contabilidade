@@ -2,21 +2,19 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "ES2022",
-    "lib": ["ES2020"],
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
     "moduleResolution": "Bundler",
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "strict": true,
+    "outDir": "dist",
+    "rootDir": "src",
     "types": ["node", "jest"],
-    "allowSyntheticDefaultImports": true
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "*": ["src/*"]
+    }
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "tests"]
+  "include": ["src"],
+  "exclude": ["node_modules", "dist", "tests", "src/controllers", "src/flows", "src/jobs", "src/app.ts", "src/services/obrigacoes.service.ts", "src/services/whatsapp.service.ts", "src/types", "src/utils/dates.ts"]
 }

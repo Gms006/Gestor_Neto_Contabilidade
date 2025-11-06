@@ -1,162 +1,173 @@
-import { subMonths, subSeconds, startOfMonth, endOfMonth } from "date-fns";
-import { listCompanies, listProcesses, listDeliveries } from "../clients/acessoriasClient";
-import { fmtDH, fmtDate } from "../lib/date";
+import { endOfMonth, startOfMonth, subDays, subMonths } from "date-fns";
+import { getProcess, listCompanies, listDeliveries, listProcesses } from "../clients/acessoriasClient";
+import { fmtDate, fmtDH } from "../lib/date";
 import { logger } from "../lib/logger";
-import {
-  getSyncState,
-  setSyncState,
-  upsertCompaniesBatch,
-  upsertProcessesBatch,
-  upsertDeliveriesBatch,
-} from "../repositories/acessoriasRepo";
+import { prisma } from "../lib/prisma";
+import { upsertCompaniesBatch } from "../repositories/companyRepo";
+import { upsertDeliveriesBatch } from "../repositories/deliveryRepo";
+import { resolveProcessExternalId, upsertProcessesBatch } from "../repositories/processRepo";
+import { getCursor, setCursor, touchCursor } from "../repositories/syncCursorRepo";
 
 export type SyncOptions = {
   full?: boolean;
   monthsHistory?: number;
   statuses?: string[] | "ALL";
+  includeDeliveries?: boolean;
 };
 
-const SAFETY_WINDOW_SECONDS = 90;
-
-async function getLastDhDate(key: string, monthsHistory = 6): Promise<Date> {
-  const stored = await getSyncState(key);
-  if (stored) {
-    const parsed = new Date(stored);
-    if (!Number.isNaN(parsed.getTime())) {
-      return subSeconds(parsed, SAFETY_WINDOW_SECONDS);
-    }
-  }
-  const fallback = subMonths(new Date(), Math.max(0, monthsHistory));
-  return subSeconds(fallback, SAFETY_WINDOW_SECONDS);
-}
-
-async function syncCompanies(): Promise<number> {
-  let page = 1;
-  let total = 0;
-
-  while (true) {
-    const batch = await listCompanies(page);
-    if (!batch.length) {
-      break;
-    }
-    await upsertCompaniesBatch(batch);
-    total += batch.length;
-    logger.info({ resource: "companies", page, batch: batch.length }, "Página sincronizada");
-    page += 1;
-  }
-
-  await setSyncState("companies:last_dh", new Date().toISOString());
-  logger.info({ resource: "companies", total }, "syncCompanies concluído");
-  return total;
-}
+const SAFETY_DAYS = 1;
+const DEFAULT_MONTHS_HISTORY = (() => {
+  const raw = process.env.SYNC_MONTHS_HISTORY;
+  const parsed = raw ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 6;
+})();
 
 function resolveStatuses(input?: string[] | "ALL"): string[] {
   if (!input || input === "ALL") {
     return ["A", "C"];
   }
   const list = Array.isArray(input) ? input : [input];
-  return Array.from(new Set(list.map((code) => code.trim().toUpperCase()).filter(Boolean)));
+  return Array.from(
+    new Set(
+      list
+        .map((value) => value.trim().toUpperCase())
+        .filter((value) => value.length > 0)
+    )
+  );
+}
+
+function computeSinceDate(full: boolean, monthsHistory: number, cursor: string | null): string | null {
+  if (full) {
+    return null;
+  }
+  if (cursor) {
+    const parsed = new Date(cursor);
+    if (!Number.isNaN(parsed.getTime())) {
+      const safeDate = subDays(parsed, SAFETY_DAYS);
+      return fmtDate(safeDate);
+    }
+  }
+  const fallback = subMonths(new Date(), monthsHistory);
+  return fmtDate(fallback);
+}
+
+async function syncCompanies(): Promise<number> {
+  logger.info({ resource: "companies" }, "Iniciando sincronização de empresas");
+  const companies = await listCompanies({ withObligations: true });
+  const count = await upsertCompaniesBatch(companies);
+  await touchCursor("companies");
+  logger.info({ resource: "companies", count }, "Sincronização de empresas concluída");
+  return count;
 }
 
 async function syncProcesses(opts: SyncOptions): Promise<number> {
-  const { full = false, monthsHistory = 6, statuses } = opts;
-  const statusList = resolveStatuses(statuses);
-  const lastDhDate = await getLastDhDate("processes:last_dh", monthsHistory);
-  const dtLastDh = full ? undefined : fmtDH(lastDhDate);
+  const { full = false, monthsHistory = DEFAULT_MONTHS_HISTORY } = opts;
+  const statuses = resolveStatuses(opts.statuses);
+  const { cursor } = await getCursor("processes");
+  const sinceDate = computeSinceDate(full, monthsHistory, cursor);
 
-  let totalProcesses = 0;
-  let totalSteps = 0;
+  let total = 0;
 
-  for (const statusCode of statusList) {
-    let page = 1;
-    while (true) {
-      const batch = await listProcesses({
-        page,
-        ProcStatus: statusCode,
-        DtLastDH: dtLastDh,
-      });
-      if (!batch.length) {
-        break;
-      }
-      const { processes, steps } = await upsertProcessesBatch(batch);
-      totalProcesses += processes;
-      totalSteps += steps;
-      logger.info(
-        { resource: "processes", status: statusCode, page, batch: batch.length },
-        "Página sincronizada"
-      );
-      page += 1;
+  for (const status of statuses) {
+    const filters: Record<string, string> = { ProcStatus: status };
+    if (sinceDate) {
+      filters.ProcInicio = sinceDate;
+      filters.ProcConclusao = fmtDate(new Date());
     }
+
+    logger.info({ resource: "processes", status, filters }, "Listando processos");
+    const summaries = await listProcesses(filters);
+    const detailsMap = new Map<string, Record<string, unknown> | null>();
+
+    for (const summary of summaries) {
+      const externalId = resolveProcessExternalId(summary);
+      if (!externalId) {
+        logger.warn({ summary }, "Resumo de processo sem identificador externo");
+        continue;
+      }
+
+      try {
+        const detail = await getProcess(externalId);
+        detailsMap.set(externalId, detail);
+      } catch (error) {
+        logger.error({ err: (error as Error).message, externalId }, "Falha ao obter detalhes do processo");
+        detailsMap.set(externalId, null);
+      }
+    }
+
+    const { processes } = await upsertProcessesBatch(summaries, detailsMap);
+    total += processes;
+    logger.info({ resource: "processes", status, batch: summaries.length, persisted: processes }, "Processos sincronizados");
   }
 
-  await setSyncState("processes:last_dh", new Date().toISOString());
-  logger.info(
-    { resource: "processes", totalProcesses, totalSteps, statuses: statusList },
-    "syncProcesses concluído"
-  );
-  return totalProcesses;
+  await setCursor("processes", new Date().toISOString(), new Date());
+  logger.info({ resource: "processes", total }, "Sincronização de processos concluída");
+  return total;
 }
 
 async function syncDeliveries(opts: SyncOptions): Promise<number> {
-  const { full = false, monthsHistory = 6 } = opts;
-  const now = new Date();
-  const dtInitial = fmtDate(startOfMonth(now));
-  const dtFinal = fmtDate(endOfMonth(now));
-  const lastDhDate = await getLastDhDate("deliveries:last_dh", monthsHistory);
-  const dtLastDh = fmtDH(full ? now : lastDhDate);
-
-  let page = 1;
-  let total = 0;
-
-  while (true) {
-    const batch = await listDeliveries({
-      page,
-      DtInitial: dtInitial,
-      DtFinal: dtFinal,
-      DtLastDH: dtLastDh,
-    });
-    if (!batch.length) {
-      break;
-    }
-    await upsertDeliveriesBatch(batch);
-    total += batch.length;
-    logger.info({ resource: "deliveries", page, batch: batch.length }, "Página sincronizada");
-    page += 1;
+  if (!opts.includeDeliveries) {
+    return 0;
   }
 
-  await setSyncState("deliveries:last_dh", new Date().toISOString());
-  logger.info({ resource: "deliveries", total }, "syncDeliveries concluído");
+  const { full = false, monthsHistory = DEFAULT_MONTHS_HISTORY } = opts;
+  const now = new Date();
+  const rangeStart = full ? subMonths(startOfMonth(now), monthsHistory) : startOfMonth(now);
+  const rangeEnd = endOfMonth(now);
+
+  const dtInitial = fmtDate(rangeStart);
+  const dtFinal = fmtDate(rangeEnd);
+
+  const { cursor } = await getCursor("deliveries");
+  const lastDh = !full && cursor ? fmtDH(subDays(new Date(cursor), SAFETY_DAYS)) : undefined;
+
+  const companies = await prisma.company.findMany({ select: { externalId: true } });
+  let total = 0;
+
+  for (const company of companies) {
+    if (!company.externalId) continue;
+    try {
+      const deliveries = await listDeliveries(company.externalId, dtInitial, dtFinal, lastDh);
+      const processed = await upsertDeliveriesBatch(company.externalId, deliveries);
+      total += processed;
+      logger.info(
+        { resource: "deliveries", company: company.externalId, processed },
+        "Entregas sincronizadas"
+      );
+    } catch (error) {
+      logger.error(
+        { err: (error as Error).message, company: company.externalId },
+        "Falha ao sincronizar entregas da empresa"
+      );
+    }
+  }
+
+  await setCursor("deliveries", new Date().toISOString(), new Date());
+  logger.info({ resource: "deliveries", total }, "Sincronização de entregas concluída");
   return total;
 }
 
 export async function syncAll(opts: SyncOptions = {}) {
-  const { full = false } = opts;
-  logger.info({ full, opts }, "Iniciando syncAll");
+  logger.info({ opts }, "Iniciando sincronização completa");
 
-  let companies = 0;
-  try {
-    companies = await syncCompanies();
-  } catch (error: any) {
-    logger.warn({ err: error?.message }, "Falha ao sincronizar companies");
-  }
-
+  const companies = await syncCompanies();
   const processes = await syncProcesses(opts);
   const deliveries = await syncDeliveries(opts);
 
-  const finishedAt = new Date().toISOString();
-  await setSyncState("global:last_sync", finishedAt);
-
-  logger.info({ companies, processes, deliveries, finishedAt }, "syncAll concluído");
-  return { companies, processes, deliveries, finishedAt };
+  logger.info({ companies, processes, deliveries }, "Sincronização completa finalizada");
+  return { companies, processes, deliveries };
 }
 
 export async function getMeta() {
+  const [companies, processes, deliveries] = await Promise.all([
+    getCursor("companies"),
+    getCursor("processes"),
+    getCursor("deliveries"),
+  ]);
+
   return {
-    lastSync: await getSyncState("global:last_sync"),
-    lastDh: {
-      companies: await getSyncState("companies:last_dh"),
-      processes: await getSyncState("processes:last_dh"),
-      deliveries: await getSyncState("deliveries:last_dh"),
-    },
+    companies,
+    processes,
+    deliveries,
   };
 }
