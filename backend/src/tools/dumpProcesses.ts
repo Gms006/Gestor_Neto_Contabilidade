@@ -1,100 +1,212 @@
-// src/tools/dumpProcesses.ts
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import {
-  listAllProcesses,
-  listAllCompanies,
-  getProcessById,
-  listDeliveriesByProcess
-} from '../clients/acessoriasClient.js';
+import fs from "node:fs/promises";
+import path from "node:path";
+import { subMonths } from "date-fns";
+import { getProcess, listDeliveries, listProcesses } from "../clients/acessoriasClient";
+import { resolveCompanyExternalId, resolveProcessExternalId } from "../repositories/processRepo";
 
-type Args = {
-  status: 'all'|'concluido'|'em_andamento';
-  limit: number;
-  splitMB: number;
-  deliveries: boolean;
-  companies: boolean;
-  outDir: string;
-  paramProcId: string; // nome do parâmetro que a API usa para filtrar entregas por processo
-};
-
-const defaults: Args = {
-  status: 'all',
-  limit: 10000,
-  splitMB: 15,
-  deliveries: true,
-  companies: true,
-  outDir: 'backend/output/matriz_processos',
-  paramProcId: process.env.ACESSORIAS_QS_PROCESS_ID || 'ProcessoId',
-};
-
-function parseArgs(): Args {
-  const argv = process.argv.slice(2);
-  const args: any = { ...defaults };
-  for (let i=0;i<argv.length;i++) {
-    const a = argv[i], v = argv[i+1];
-    if (a === '--status' && v) { args.status = v; i++; continue; }
-    if (a === '--limit' && v) { args.limit = Number(v); i++; continue; }
-    if (a === '--splitMB' && v) { args.splitMB = Number(v); i++; continue; }
-    if (a === '--no-deliveries') { args.deliveries = false; continue; }
-    if (a === '--no-companies') { args.companies = false; continue; }
-    if (a === '--outDir' && v) { args.outDir = v; i++; continue; }
-    if (a === '--procParam' && v) { args.paramProcId = v; i++; continue; }
-  }
-  return args as Args;
+interface CliArgs {
+  status: "ALL" | "OPEN" | "CLOSED";
+  empresa?: string;
+  desde?: string;
+  ate?: string;
 }
 
-async function appendChunk(baseDir: string, idx: number, text: string, splitMB: number): Promise<number> {
-  const file = path.resolve(baseDir, `processos_${String(idx).padStart(3,'0')}.txt`);
-  const max = splitMB * 1024 * 1024;
-  let current = '';
-  try { current = await fs.readFile(file, 'utf8'); } catch {}
-  if (Buffer.byteLength(current) + Buffer.byteLength(text) > max) {
-    return appendChunk(baseDir, idx+1, text, splitMB);
+interface DumpEntry {
+  summary: Record<string, unknown>;
+  detail: Record<string, unknown> | null;
+  deliveries: Record<string, unknown>[];
+}
+
+const OUTPUT_BASE = path.resolve(process.cwd(), "output/matriz_processos");
+const RAW_DIR = path.join(OUTPUT_BASE, "_raw");
+const TXT_DIR = path.join(OUTPUT_BASE, "txt");
+const MAX_CHUNK_SIZE = 9 * 1024 * 1024; // ~9 MB
+
+function parseArgs(): CliArgs {
+  const args: CliArgs = { status: "ALL" };
+  for (let i = 2; i < process.argv.length; i += 1) {
+    const arg = process.argv[i];
+    const [key, rawValue] = arg.split("=");
+    const value = rawValue ?? process.argv[i + 1];
+    switch (true) {
+      case key === "--status" && value !== undefined:
+        args.status = value.toUpperCase() as CliArgs["status"];
+        if (!rawValue) i += 1;
+        break;
+      case key === "--empresa" && value !== undefined:
+        args.empresa = value;
+        if (!rawValue) i += 1;
+        break;
+      case key === "--desde" && value !== undefined:
+        args.desde = value;
+        if (!rawValue) i += 1;
+        break;
+      case key === "--ate" && value !== undefined:
+        args.ate = value;
+        if (!rawValue) i += 1;
+        break;
+      default:
+        break;
+    }
   }
-  await fs.mkdir(baseDir, { recursive: true });
-  await fs.writeFile(file, current + text, 'utf8');
-  return idx;
+  return args;
+}
+
+function mapStatusToProcStatus(status: CliArgs["status"]): string | undefined {
+  if (status === "OPEN") return "A";
+  if (status === "CLOSED") return "C";
+  return undefined;
+}
+
+async function ensureDirectories() {
+  await fs.mkdir(RAW_DIR, { recursive: true });
+  await fs.mkdir(TXT_DIR, { recursive: true });
+}
+
+function formatDateStamp(): string {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  const hh = String(now.getHours()).padStart(2, "0");
+  const min = String(now.getMinutes()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}-${hh}${min}`;
+}
+
+function normalizeEmpresa(value?: string): string | undefined {
+  if (!value) return undefined;
+  const digits = value.replace(/\D+/g, "");
+  return digits.length ? digits : value.trim();
+}
+
+async function fetchDeliveries(
+  companyExternalId: string | null,
+  dateStart: string,
+  dateEnd: string
+): Promise<Record<string, unknown>[]> {
+  if (!companyExternalId) {
+    return [];
+  }
+  try {
+    return await listDeliveries(companyExternalId, dateStart, dateEnd);
+  } catch (error) {
+    console.warn(
+      `[dump] Falha ao buscar entregas da empresa ${companyExternalId}: ${(error as Error).message}`
+    );
+    return [];
+  }
+}
+
+function renderTextEntry(index: number, entry: DumpEntry): string {
+  const header = `==================== PROCESSO ${index} ====================\n`;
+  const summary = JSON.stringify(entry.summary, null, 2);
+  const detail = JSON.stringify(entry.detail, null, 2);
+  const deliveries = JSON.stringify(entry.deliveries, null, 2);
+  const body =
+    `Resumo:\n${summary}\n\n` +
+    `Detalhe:\n${detail}\n\n` +
+    `Entregas:\n${deliveries}\n`;
+  const footer = `==========================================================\n\n`;
+  return header + body + footer;
+}
+
+async function writeChunks(entries: DumpEntry[]): Promise<string[]> {
+  const chunkPaths: string[] = [];
+  let chunkIndex = 1;
+  let currentBuffer = "";
+  let currentSize = 0;
+
+  const flush = async () => {
+    if (!currentBuffer) return;
+    const fileName = `matriz_processos_${String(chunkIndex).padStart(3, "0")}.txt`;
+    const filePath = path.join(TXT_DIR, fileName);
+    await fs.writeFile(filePath, currentBuffer, "utf8");
+    chunkPaths.push(filePath);
+    chunkIndex += 1;
+    currentBuffer = "";
+    currentSize = 0;
+  };
+
+  for (let i = 0; i < entries.length; i += 1) {
+    const text = renderTextEntry(i + 1, entries[i]);
+    const textSize = Buffer.byteLength(text, "utf8");
+    if (currentSize + textSize > MAX_CHUNK_SIZE) {
+      await flush();
+    }
+    currentBuffer += text;
+    currentSize += textSize;
+  }
+
+  if (currentBuffer) {
+    await flush();
+  }
+
+  return chunkPaths;
 }
 
 async function main() {
   const args = parseArgs();
-  console.log('[dump] start', args);
+  const statusCode = mapStatusToProcStatus(args.status);
+  const empresaFilter = normalizeEmpresa(args.empresa);
+  const apiFilters: Record<string, string> = {};
+  if (statusCode) apiFilters.ProcStatus = statusCode;
+  if (args.desde) apiFilters.ProcInicio = args.desde;
+  if (args.ate) apiFilters.ProcConclusao = args.ate;
 
-  const qs: Record<string, any> = {};
-  if (args.status === 'concluido') qs.Status = 'Concluido';
-  if (args.status === 'em_andamento') qs.Status = 'EmAndamento';
+  console.log("[dump] Iniciando com filtros", { ...apiFilters, empresa: empresaFilter });
 
-  const processes = await listAllProcesses(qs);
-  const limited = processes.slice(0, args.limit);
-  const companies = args.companies ? await listAllCompanies() : [];
+  const processes = await listProcesses(apiFilters);
 
-  const outBase = path.resolve(process.cwd(), args.outDir);
-  await fs.mkdir(outBase, { recursive: true });
+  const filteredProcesses = empresaFilter
+    ? processes.filter((summary) => {
+        const companyId = resolveCompanyExternalId(summary);
+        if (!companyId) return false;
+        return companyId.includes(empresaFilter);
+      })
+    : processes;
 
-  let chunk = 1;
-  const jsonl: string[] = [];
+  console.log(`[dump] ${filteredProcesses.length} processos após filtros`);
 
-  for (let i = 0; i < limited.length; i++) {
-    const p: any = limited[i];
-    const pid = p.id ?? p.ID ?? p.ProcessoId;
-    const detailed = await getProcessById(pid);
-    const deliveries = args.deliveries ? await listDeliveriesByProcess(pid, args.paramProcId) : [];
-    const company = companies.find(c => String(c.id ?? c.empresaId) === String(p.empresaId ?? p.EmpresaId)) || null;
+  const dateStartForDeliveries = args.desde ?? subMonths(new Date(), 12).toISOString().slice(0, 10);
+  const dateEndForDeliveries = args.ate ?? new Date().toISOString().slice(0, 10);
 
-    const full = { process: p, detailed, deliveries, company };
-    const txt = JSON.stringify(full, null, 2) + '\n\n';
-    chunk = await appendChunk(outBase, chunk, txt, args.splitMB);
-    jsonl.push(JSON.stringify(full));
+  const entries: DumpEntry[] = [];
 
-    if ((i+1) % 50 === 0) console.log(`[dump] ${i+1}/${limited.length}`);
+  for (const summary of filteredProcesses) {
+    const externalId = resolveProcessExternalId(summary);
+    if (!externalId) {
+      console.warn("[dump] Ignorando processo sem identificador", summary);
+      continue;
+    }
+
+    let detail: Record<string, unknown> | null = null;
+    try {
+      detail = await getProcess(externalId);
+    } catch (error) {
+      console.warn(`[dump] Falha ao obter detalhes do processo ${externalId}: ${(error as Error).message}`);
+    }
+
+    const companyExternalId = resolveCompanyExternalId(summary);
+    const deliveries = await fetchDeliveries(companyExternalId, dateStartForDeliveries, dateEndForDeliveries);
+
+    entries.push({ summary, detail, deliveries });
   }
 
-  await fs.writeFile(path.join(outBase, 'processos.jsonl'), jsonl.join('\n'), 'utf8');
-  console.log('[dump] done at', outBase);
+  await ensureDirectories();
+  const stamp = formatDateStamp();
+  const rawFile = path.join(RAW_DIR, `processes.${stamp}.json`);
+  await fs.writeFile(rawFile, JSON.stringify(entries, null, 2), "utf8");
+  const chunkPaths = await writeChunks(entries);
+
+  console.log("[dump] Processos exportados:", entries.length);
+  console.log("[dump] Arquivo bruto:", rawFile);
+  console.log("[dump] Arquivos TXT:");
+  for (const file of chunkPaths) {
+    console.log(` - ${file}`);
+  }
 }
 
-main().catch(e => {
-  console.error('[dump] ERRO', e?.message || e);
+main().catch((error) => {
+  console.error("[dump] Erro", error);
   process.exit(1);
 });
