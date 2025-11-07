@@ -1,4 +1,5 @@
 import { differenceInCalendarDays, isValid, startOfDay, subDays } from "date-fns";
+import { isAxiosError } from "axios";
 import {
   listProcessesAll,
   listDeliveriesListAll,
@@ -216,18 +217,29 @@ export async function syncAll(): Promise<void> {
   const companyCache = new Map<string, string>();
   const processCache = new Map<string, string>();
 
-  await syncProcesses(companyCache, processCache);
-  await syncDeliveries(companyCache, processCache);
+  const processesCount = await syncProcesses(companyCache, processCache);
+  const deliveryCounts = await syncDeliveries(companyCache, processCache);
+
+  const counts = {
+    processes: processesCount,
+    deliveriesListAll: deliveryCounts.listAll,
+    deliveriesByCompany: deliveryCounts.byCompany,
+    deliveriesTotal: deliveryCounts.listAll + deliveryCounts.byCompany,
+  };
+
+  logger.info({ counts }, "Sync concluido");
 }
 
 async function syncProcesses(
   companyCache: Map<string, string>,
   processCache: Map<string, string>
-) {
+): Promise<number> {
   const statuses: ProcStatus[] = ["A", "C"];
   const lastDh = await getSyncCursor("processes");
   const since = lastDh ?? subDays(new Date(), 7);
   logger.info({ since }, "Sincronizando processos (A/C)");
+
+  let processed = 0;
 
   for (const status of statuses) {
     const processes = await pageThrough((page) =>
@@ -249,16 +261,18 @@ async function syncProcesses(
         raw: parsed.raw,
       });
       processCache.set(process.externalId, process.id);
+      processed += 1;
     }
   }
 
   await saveSyncCursor("processes", new Date());
+  return processed;
 }
 
 async function syncDeliveries(
   companyCache: Map<string, string>,
   processCache: Map<string, string>
-) {
+): Promise<{ listAll: number; byCompany: number }> {
   const lastDh = clampListAllCursor(await getSyncCursor("deliveries"));
   logger.info({ lastDh }, "Sincronizando entregas (ListAll)");
   const seen = new Set<string>();
@@ -267,15 +281,20 @@ async function syncDeliveries(
   );
   logger.info({ count: deliveries.length }, "Entregas recebidas via ListAll");
 
+  let listAllCount = 0;
   for (const raw of deliveries) {
-    await persistDelivery(raw as RawRecord, companyCache, processCache, seen);
+    if (await persistDelivery(raw as RawRecord, companyCache, processCache, seen)) {
+      listAllCount += 1;
+    }
   }
 
+  let byCompanyCount = 0;
   if (!deliveries.length) {
-    await syncDeliveriesByCompany(lastDh, companyCache, processCache, seen);
+    byCompanyCount = await syncDeliveriesByCompany(lastDh, companyCache, processCache, seen);
   }
 
   await saveSyncCursor("deliveries", new Date());
+  return { listAll: listAllCount, byCompany: byCompanyCount };
 }
 
 async function syncDeliveriesByCompany(
@@ -283,12 +302,13 @@ async function syncDeliveriesByCompany(
   companyCache: Map<string, string>,
   processCache: Map<string, string>,
   seen: Set<string>
-) {
+): Promise<number> {
   const companies = await listCompanies();
   const from = startOfDay(lastDh);
   const to = new Date();
   logger.info({ companies: companies.length, from, to }, "Sincronizando entregas por empresa");
 
+  let processed = 0;
   for (const company of companies) {
     if (!company.identifier) continue;
     try {
@@ -302,15 +322,25 @@ async function syncDeliveriesByCompany(
       );
       logger.info({ company: company.externalId, count: chunks.length }, "Entregas recebidas por empresa");
       for (const raw of chunks) {
-        await persistDelivery(raw as RawRecord, companyCache, processCache, seen);
+        if (await persistDelivery(raw as RawRecord, companyCache, processCache, seen)) {
+          processed += 1;
+        }
       }
     } catch (error) {
+      if (isAxiosError(error) && error.response?.status === 404) {
+        logger.warn(
+          { company: company.externalId, status: 404, err: error.message },
+          "Falha ao sincronizar entregas da empresa"
+        );
+        continue;
+      }
       logger.warn(
         { company: company.externalId, err: (error as Error).message },
         "Falha ao sincronizar entregas da empresa"
       );
     }
   }
+  return processed;
 }
 
 async function persistDelivery(
@@ -318,10 +348,10 @@ async function persistDelivery(
   companyCache: Map<string, string>,
   processCache: Map<string, string>,
   seen: Set<string>
-) {
+): Promise<boolean> {
   const parsed = parseDelivery(raw);
-  if (!parsed) return;
-  if (seen.has(parsed.externalId)) return;
+  if (!parsed) return false;
+  if (seen.has(parsed.externalId)) return false;
   seen.add(parsed.externalId);
 
   const companyId = await ensureCompanyId(parsed.company, companyCache);
@@ -344,4 +374,5 @@ async function persistDelivery(
     processId,
     payload: parsed.raw,
   });
+  return true;
 }
