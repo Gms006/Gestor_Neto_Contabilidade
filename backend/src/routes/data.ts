@@ -1,6 +1,8 @@
 import { Router, Request, Response } from "express";
 import { PrismaClient, Prisma } from "@prisma/client";
 
+import { formatISO, mapProcessStatus } from "../lib/utils";
+
 const prisma = new PrismaClient();
 
 export const dataRouter = Router();
@@ -46,5 +48,56 @@ dataRouter.get("/processes", async (req: Request, res: Response) => {
   ]);
 
   res.json({ pagina, take: PAGE_SIZE, total, items });
+});
+
+const EXPORT_PAGE_SIZE = 10000;
+
+dataRouter.get("/processes/export.txt", async (_req: Request, res: Response) => {
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+
+  const lines: string[] = [];
+  let skip = 0;
+
+  while (true) {
+    const processes = await prisma.process.findMany({
+      skip,
+      take: EXPORT_PAGE_SIZE,
+      orderBy: { createdAt: "asc" },
+      include: {
+        company: {
+          select: {
+            identifier: true,
+            name: true,
+          },
+        },
+      },
+    });
+
+    if (!processes.length) {
+      break;
+    }
+
+    for (const proc of processes) {
+      const status = mapProcessStatus(proc.statusRaw ?? undefined, proc.progress);
+      lines.push(
+        [
+          proc.id,
+          proc.title,
+          status.toLowerCase(),
+          proc.company?.identifier ?? "",
+          proc.company?.name ?? "",
+          formatISO(proc.createdAt),
+          formatISO(proc.updatedAt),
+        ].join("\t")
+      );
+    }
+
+    skip += processes.length;
+    if (processes.length < EXPORT_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  res.send(lines.join("\n"));
 });
 
