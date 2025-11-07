@@ -1,12 +1,11 @@
 import { Router } from "express";
-import { syncAll } from "../services/syncService.js";
+import { syncAll } from "../services/syncService";
 
 export const syncRouter = Router();
 
-syncRouter.post("/sync/run", async (req, res) => {
+syncRouter.post("/sync/run", async (_req, res) => {
   try {
-    const body = req.body ?? {};
-    await syncAll(body);
+    await syncAll();
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: String(e?.message ?? e) });

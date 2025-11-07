@@ -8,52 +8,62 @@ generator client {
 }
 
 model Company {
-  id          String    @id @default(cuid())
-  externalId  String    @unique
-  cnpj        String?
-  name        String?
+  id          String     @id @default(cuid())
+  externalId  String     @unique
+  name        String
+  identifier  String?
   email       String?
-  raw         Json?
+  raw         String?    // JSON serializado
+
   processes   Process[]
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  deliveries  Delivery[]
+
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 }
 
 model Process {
-  id          String    @id @default(cuid())
-  externalId  String    @unique
-  title       String?
+  id          String     @id @default(cuid())
+  externalId  String     @unique
+  title       String
   statusRaw   String?
   statusNorm  String?
   progress    Int?
-  startedAt   DateTime?
-  finishedAt  DateTime?
+
   companyId   String?
-  company     Company?  @relation(fields: [companyId], references: [id])
-  raw         Json?
+  company     Company?   @relation(fields: [companyId], references: [id])
+  raw         String?    // JSON serializado
+
   deliveries  Delivery[]
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 }
 
 model Delivery {
-  id          String    @id @default(cuid())
-  externalId  String    @unique
-  title       String?
-  competence  String?
-  situation   String?
+  id          String     @id @default(cuid())
+  externalId  String     @unique
+  name        String?
   dueDate     DateTime?
-  payload     Json?
+  status      String?
+  payload     String?    // JSON serializado
+
   processId   String?
-  process     Process?  @relation(fields: [processId], references: [id])
+  process     Process?   @relation(fields: [processId], references: [id])
+
   companyId   String?
-  company     Company?  @relation(fields: [companyId], references: [id])
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  company     Company?   @relation(fields: [companyId], references: [id])
+
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([processId])
+  @@index([companyId])
 }
 
 model SyncCursor {
-  id        String   @id @default("global")
-  lastDH    DateTime?
+  id        String   @id @default(cuid())
+  kind      String   @unique // 'companies' | 'processes' | 'deliveries'
+  lastDh    DateTime?
   updatedAt DateTime @updatedAt
 }

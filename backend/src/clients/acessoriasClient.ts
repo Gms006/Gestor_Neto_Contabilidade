@@ -1,73 +1,72 @@
-import axios, { AxiosInstance } from "axios";
-import { env } from "../lib/env.js";
-import { logger } from "../lib/logger.js";
+import axios from "axios";
+import { format } from "date-fns";
+import { env } from "../lib/env";
 
-function buildUrl(
-  resource: "companies" | "processes" | "deliveries",
-  opts: {
-    identificador?: string; // "ListAll" ou CNPJ/CPF/ID
-    pagina?: number;
-    procStatus?: "Concluido" | "Em andamento" | "Outro";
-    title?: string;
-    id?: string | number;
-    dtLastDH?: string; // "YYYY-MM-DD HH:MM:SS"
-    dtInitial?: string; // "YYYY-MM-DD"
-    dtFinal?: string;   // "YYYY-MM-DD"
-  }
-) {
-  const base = env.ACESSORIAS_BASE_URL;
-  const ident = opts.identificador ?? "ListAll";
-  const u = new URL(base);
+const api = axios.create({
+  baseURL: env.ACESSORIAS_BASE_URL,
+  headers: { Authorization: `Bearer ${env.ACESSORIAS_TOKEN}` },
+  timeout: 30000,
+});
 
-  if (resource === "companies") {
-    u.pathname = `/companies/${ident}`;
-    if (opts.pagina) u.searchParams.set("Pagina", String(opts.pagina));
-  } else if (resource === "processes") {
-    u.pathname = ident === "ListAll" ? `/processes/ListAll` : `/processes/${ident}`;
-    if (opts.pagina) u.searchParams.set("Pagina", String(opts.pagina));
-    if (opts.procStatus) u.searchParams.set("ProcStatus", opts.procStatus);
-    if (opts.title) u.searchParams.set("Title", opts.title);
-    if (opts.id) u.searchParams.set("ID", String(opts.id));
-    if (opts.dtLastDH) u.searchParams.set("DtLastDH", opts.dtLastDH);
-  } else if (resource === "deliveries") {
-    u.pathname = `/deliveries/${ident}/`;
-    if (opts.dtInitial) u.searchParams.set("DtInitial", opts.dtInitial);
-    if (opts.dtFinal) u.searchParams.set("DtFinal", opts.dtFinal);
-    if (opts.dtLastDH) u.searchParams.set("DtLastDH", opts.dtLastDH);
-    if (opts.pagina) u.searchParams.set("Pagina", String(opts.pagina));
-  }
-  return u.toString();
+const fmtDH = (d: Date) => format(d, "yyyy-MM-dd HH:mm:ss");
+const fmtD  = (d: Date) => format(d, "yyyy-MM-dd");
+
+export type ProcStatus = "A" | "C" | "P" | "T" | "E" | "N" | "F"; // conforme doc
+
+export async function listProcessesAll(params: {
+  status?: ProcStatus,
+  lastDh?: Date,
+  page?: number,
+}) {
+  const page = params.page ?? 1;
+  const query: Record<string, string> = { Pagina: String(page) };
+  query["ProcID"] = "ListAll";
+  if (params.status) query["ProcStatus"] = params.status;
+  if (params.lastDh) query["DtLastDH"] = fmtDH(params.lastDh);
+  const url = `/processes/ListAll/`;
+  const { data } = await api.get(url, { params: query });
+  return data as any[];
 }
 
-function makeClient(): AxiosInstance {
-  const instance = axios.create({
-    headers: {
-      Authorization: `Bearer ${env.ACESSORIAS_TOKEN}`,
-      "User-Agent": "NetoContabilidade-Gestor/1.0",
-      Accept: "application/json"
-    },
-    timeout: 30000
-  });
-  return instance;
+export async function listDeliveriesListAll(params: {
+  lastDh: Date,  // obrigatório para ListAll (somente hoje/ontem)
+  page?: number,
+  withConfig?: boolean,
+}) {
+  const page = params.page ?? 1;
+  const query: Record<string, string> = { Pagina: String(page), DtLastDH: fmtDH(params.lastDh) };
+  if (params.withConfig) query["config"] = "S";
+  const url = `/deliveries/ListAll/`;
+  const { data } = await api.get(url, { params: query });
+  return data as any[];
 }
 
-async function fetchWithRetry<T>(client: AxiosInstance, url: string, tries = 3): Promise<T> {
-  let lastErr: any;
-  for (let i = 1; i <= tries; i++) {
-    try {
-      const { data } = await client.get<T>(url);
-      return data;
-    } catch (err: any) {
-      lastErr = err;
-      logger.error({ url, status: err?.response?.status }, `HTTP fail try ${i}/${tries}`);
-      await new Promise(res => setTimeout(res, 200 + Math.random() * 400));
-    }
+export async function listDeliveriesById(params: {
+  identificador: string, // CNPJ/CPF
+  dtInitial: Date,
+  dtFinal: Date,
+  page?: number,
+  withConfig?: boolean,
+}) {
+  const page = params.page ?? 1;
+  const query: Record<string, string> = {
+    Pagina: String(page),
+    DtInitial: fmtD(params.dtInitial),
+    DtFinal: fmtD(params.dtFinal),
+  };
+  if (params.withConfig) query["config"] = "S";
+  const url = `/deliveries/${encodeURIComponent(params.identificador)}/`;
+  const { data } = await api.get(url, { params: query });
+  return data as any[];
+}
+
+export async function pageThrough<T>(fn: (page: number) => Promise<T[]>): Promise<T[]> {
+  const out: T[] = [];
+  for (let p = 1; p < 9999; p++) {
+    const chunk = await fn(p);
+    if (!chunk?.length) break;
+    out.push(...chunk);
+    if (chunk.length < 50) break; // doc: 50 por página
   }
-  throw lastErr;
+  return out;
 }
-
-export const acessoriasClient = {
-  buildUrl,
-  makeClient,
-  fetchWithRetry
-};

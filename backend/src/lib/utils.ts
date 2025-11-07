@@ -1,6 +1,6 @@
-export function mapProcessStatus(statusRaw?: string, progress?: number): "CONCLUIDO"|"EM_ANDAMENTO"|"OUTRO" {
-  const s = (statusRaw ?? "").toLowerCase();
-  if (s.includes("conclu") || progress === 100) return "CONCLUIDO";
-  if (s.includes("andamento") || (typeof progress === "number" && progress < 100)) return "EM_ANDAMENTO";
+export function mapProcessStatus(raw?: string | null, progress?: number | null): "EM_ANDAMENTO" | "CONCLUIDO" | "OUTRO" {
+  const r = (raw ?? "").trim().toUpperCase();
+  if (r === "C" || progress === 100) return "CONCLUIDO";
+  if (r === "A" || (progress ?? 0) < 100) return "EM_ANDAMENTO";
   return "OUTRO";
 }

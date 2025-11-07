@@ -11,10 +11,9 @@
   },
   "scripts": {
     "dev": "cross-env NODE_ENV=development TS_NODE_PROJECT=tsconfig.json tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
-    "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate deploy"
+    "prisma:format": "prisma format",
+    "prisma:gen": "prisma generate",
+    "prisma:migrate": "prisma migrate dev"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

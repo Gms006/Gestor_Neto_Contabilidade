@@ -3,11 +3,11 @@ import cors from "cors";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { env } from "./lib/env.js";
-import { logger } from "./lib/logger.js";
-import { syncRouter } from "./routes/sync.js";
-import { dataRouter } from "./routes/data.js";
-import { syncAll } from "./services/syncService.js";
+import { env } from "./lib/env";
+import { logger } from "./lib/logger";
+import { syncRouter } from "./routes/sync";
+import { dataRouter } from "./routes/data";
+import { syncAll } from "./services/syncService";
 import cron from "node-cron";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -29,7 +29,8 @@ async function bootstrap() {
   const server = app.listen(env.PORT, () => {
     logger.info({ port: env.PORT }, "Servidor iniciado");
     logger.info(`Web:  http://localhost:${env.PORT}/`);
-    logger.info(`API:  http://localhost:${env.PORT}/api/ready`);
+    logger.info(`API ready:     http://localhost:${env.PORT}/api/ready`);
+    logger.info(`API summary:   http://localhost:${env.PORT}/api/processes/summary`);
   });
 
   process.on("SIGINT", () => server.close(() => process.exit(0)));
@@ -37,14 +38,14 @@ async function bootstrap() {
 
   try {
     logger.info("Boot: executando sync inicial (incremental) …");
-    await syncAll({ full: false, monthsHistory: 6, statuses: "ALL" });
+    await syncAll();
   } catch (e: any) {
     logger.error({ err: e?.message }, "Boot: sync inicial falhou (server continua)");
   }
 
   cron.schedule("0 */3 * * *", async () => {
     try {
-      await syncAll({ full: false, monthsHistory: 6, statuses: "ALL" });
+      await syncAll();
     } catch (e) {
       logger.error({ err: String((e as any)?.message ?? e) }, "Scheduler sync falhou");
     }
