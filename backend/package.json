@@ -10,7 +10,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "dev": "cross-env NODE_ENV=development TS_NODE_PROJECT=tsconfig.json tsx watch src/server.ts",
+    "dev": "cross-env NODE_ENV=development DOTENV_CONFIG_PATH=./.env node --require dotenv/config ./node_modules/tsx/dist/cli.js watch src/server.ts",
     "prisma:format": "prisma format",
     "prisma:gen": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
