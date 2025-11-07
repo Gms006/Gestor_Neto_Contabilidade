@@ -1,82 +1,59 @@
-// backend/prisma/schema.prisma
-generator client {
-  provider = "prisma-client-js"
-}
-
 datasource db {
   provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
-model Company {
-  id           String    @id @default(cuid())
-  externalId   String    @unique
-  document     String?
-  name         String
-  legalName    String?
-  obligations  String?
-  raw          String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  processes    Process[]
+generator client {
+  provider = "prisma-client-js"
+}
 
-  @@index([document])
+model Company {
+  id          String    @id @default(cuid())
+  externalId  String    @unique
+  cnpj        String?
+  name        String?
+  email       String?
+  raw         Json?
+  processes   Process[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
 model Process {
-  id               String    @id @default(cuid())
-  externalId       String
-  companyId        String
-  company          Company   @relation(fields: [companyId], references: [id])
-  title            String
-  department       String?
-  description      String?
-  statusRaw        String?
-  statusNormalized String?
-  progress         Float?
-  startedAt        DateTime?
-  finishedAt       DateTime?
-  lastDh           DateTime?
-  responsible      String?
-  steps            String?
-  history          String?
-  attachments      String?
-  raw              String?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
-  deliveries       Delivery[]
-
-  @@unique([externalId])
-  @@unique([companyId, externalId])
-  @@index([statusNormalized])
-  @@index([statusRaw])
-  @@index([startedAt])
-  @@index([finishedAt])
+  id          String    @id @default(cuid())
+  externalId  String    @unique
+  title       String?
+  statusRaw   String?
+  statusNorm  String?
+  progress    Int?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  companyId   String?
+  company     Company?  @relation(fields: [companyId], references: [id])
+  raw         Json?
+  deliveries  Delivery[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
 model Delivery {
-  id           String    @id @default(cuid())
-  externalId   String
-  processId    String
-  process      Process   @relation(fields: [processId], references: [id])
-  type         String?
-  description  String?
-  statusRaw    String?
-  occurredAt   DateTime?
-  dueAt        DateTime?
-  raw          String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-
-  @@unique([externalId])
-  @@unique([processId, externalId])
-  @@index([processId])
+  id          String    @id @default(cuid())
+  externalId  String    @unique
+  title       String?
+  competence  String?
+  situation   String?
+  dueDate     DateTime?
+  payload     Json?
+  processId   String?
+  process     Process?  @relation(fields: [processId], references: [id])
+  companyId   String?
+  company     Company?  @relation(fields: [companyId], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
 model SyncCursor {
-  resource   String   @id
-  cursor     String?
-  lastRunAt  DateTime?
-  updatedAt  DateTime @updatedAt
-  createdAt  DateTime @default(now())
+  id        String   @id @default("global")
+  lastDH    DateTime?
+  updatedAt DateTime @updatedAt
 }

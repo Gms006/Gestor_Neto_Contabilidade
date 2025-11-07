@@ -1,81 +1,40 @@
 import { Router } from "express";
-import { logger } from "../lib/logger";
-import { getSummarySafe, listProcessesWithFilters } from "../repositories/processRepo";
+import { PrismaClient } from "@prisma/client";
+const prisma = new PrismaClient();
 
 export const dataRouter = Router();
 
-const STATUS_QUERY_TO_NORMALIZED: Record<string, string | undefined> = {
-  concluidos: "CONCLUIDO",
-  concluido: "CONCLUIDO",
-  "em_andamento": "EM_ANDAMENTO",
-  andamento: "EM_ANDAMENTO",
-  pendentes: "EM_ANDAMENTO",
-  outros: "OUTRO",
-  all: undefined,
-  todos: undefined,
-};
-
+// resumo
 dataRouter.get("/processes/summary", async (_req, res) => {
-  try {
-    const statusQuery =
-      typeof req.query.status === "string" ? req.query.status.toLowerCase() : "all";
-    const statusNormalized = STATUS_QUERY_TO_NORMALIZED[statusQuery] ?? undefined;
-
-    const page = Math.max(1, Number(req.query.page ?? 1));
-    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize ?? 20)));
-    const skip = (page - 1) * pageSize;
-
-    const empresa =
-      typeof req.query.empresa === "string" ? req.query.empresa.trim() : undefined;
-    const titulo =
-      typeof req.query.titulo === "string" ? req.query.titulo.trim() : undefined;
-    const sortParam = typeof req.query.sort === "string" ? req.query.sort.toLowerCase() : "desc";
-    const sort: "asc" | "desc" = sortParam === "asc" ? "asc" : "desc";
-
-    let companyExternalId: string | undefined;
-    let companyName: string | undefined;
-    if (empresa) {
-      const digits = empresa.replace(/\D+/g, "");
-      if (digits.length >= 8) {
-        companyExternalId = digits;
-      } else {
-        companyName = empresa;
-      }
-    }
-
-    const { items, total } = await listProcessesWithFilters({
-      status: statusNormalized,
-      companyExternalId,
-      companyName,
-      title: titulo,
-      skip,
-      take: pageSize,
-      sort,
-    });
-
-    res.json({
-      data: items,
-      page,
-      pageSize,
-      total,
-      totalPages: Math.ceil(total / pageSize),
-    });
-  } catch (error) {
-    logger.error({ err: (error as Error).message }, "Falha ao listar processos");
-    res.status(500).json({ message: "Erro ao listar processos" });
-  }
+  const [c1, c2, c3] = await Promise.all([
+    prisma.process.count({ where: { statusNorm: "CONCLUIDO" } }),
+    prisma.process.count({ where: { statusNorm: "EM_ANDAMENTO" } }),
+    prisma.process.count({ where: { statusNorm: "OUTRO" } })
+  ]);
+  res.json({ concluidos: c1, em_andamento: c2, outros: c3 });
 });
 
-dataRouter.get("/processes/summary", async (_req, res) => {
-  try {
-    const { concluidos, em_andamento, outros } = await getSummarySafe();
-    res.json({
-      concluidos: concluidos ?? 0,
-      em_andamento: em_andamento ?? 0,
-      outros: outros ?? 0,
-    });
-  } catch (error) {
-    logger.error({ err: (error as Error).message }, "Falha ao gerar resumo de processos");
-    res.json({ concluidos: 0, em_andamento: 0, outros: 0 });
-  }
-});
+// listing com filtros
+async function listProcesses(req, res) {
+  const pagina = Number(req.query.pagina ?? 1);
+  const take = 50;
+  const skip = (pagina - 1) * take;
+  const status = String(req.query.status ?? "todos");
+  const where: any = {};
+
+  if (status === "concluido") where.statusNorm = "CONCLUIDO";
+  else if (status === "em_andamento") where.statusNorm = "EM_ANDAMENTO";
+
+  if (req.query.empresaId) where.companyId = String(req.query.empresaId);
+  if (req.query.title) where.title = { contains: String(req.query.title), mode: "insensitive" };
+
+  const [items, total] = await Promise.all([
+    prisma.process.findMany({ where, take, skip, orderBy: { updatedAt: "desc" } }),
+    prisma.process.count({ where })
+  ]);
+
+  res.json({ pagina, take, total, items });
+}
+
+dataRouter.get("/processes", listProcesses);
+dataRouter.get("/processos", listProcesses);
