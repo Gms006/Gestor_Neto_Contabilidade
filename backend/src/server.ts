@@ -1,64 +1,54 @@
-// src/server.ts
 import express from "express";
 import cors from "cors";
-import path from "path";
-import { fileURLToPath } from "url";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { env } from "./lib/env.js";
 import { logger } from "./lib/logger.js";
-import { startScheduler } from "./scheduler/scheduler.js";
 import { syncRouter } from "./routes/sync.js";
 import { dataRouter } from "./routes/data.js";
 import { syncAll } from "./services/syncService.js";
+import cron from "node-cron";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function bootstrap() {
   const app = express();
-
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
 
-  // Rotas de API
   app.use("/api", syncRouter);
   app.use("/api", dataRouter);
 
-  // Healthcheck
-  app.get("/api/ready", (_req, res) => res.json({ ok: true }));
-
-  // Servir o frontend pela raiz
   const webDir = path.resolve(__dirname, "..", "..", "frontend");
   app.use("/", express.static(webDir));
 
-  const port = env.PORT ?? 3000;
-  const server = app.listen(port, () => {
-    logger.info({ port }, "Servidor iniciado");
-    logger.info(`Web:  http://localhost:${port}/`);
-    logger.info(`API:  http://localhost:${port}/api/ready`);
+  app.get("/api/ready", (_req, res) => res.json({ ok: true }));
+
+  const server = app.listen(env.PORT, () => {
+    logger.info({ port: env.PORT }, "Servidor iniciado");
+    logger.info(`Web:  http://localhost:${env.PORT}/`);
+    logger.info(`API:  http://localhost:${env.PORT}/api/ready`);
   });
 
-  // Graceful shutdown
-  function shutdown(sig: string) {
-    logger.info({ sig }, "Encerrando servidor…");
-    server.close(() => {
-      logger.info("HTTP fechado. Até mais! 👋");
-      process.exit(0);
-    });
-  }
-  process.on("SIGINT", () => shutdown("SIGINT"));
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => server.close(() => process.exit(0)));
+  process.on("SIGTERM", () => server.close(() => process.exit(0)));
 
-  // Sincronização inicial (incremental) – não bloqueante pro server subir
   try {
     logger.info("Boot: executando sync inicial (incremental) …");
     await syncAll({ full: false, monthsHistory: 6, statuses: "ALL" });
   } catch (e: any) {
-    logger.error({ err: e?.message }, "Boot: sync inicial falhou (seguindo com server up)");
+    logger.error({ err: e?.message }, "Boot: sync inicial falhou (server continua)");
   }
 
-  // Scheduler 3/3h
-  startScheduler();
+  cron.schedule("0 */3 * * *", async () => {
+    try {
+      await syncAll({ full: false, monthsHistory: 6, statuses: "ALL" });
+    } catch (e) {
+      logger.error({ err: String((e as any)?.message ?? e) }, "Scheduler sync falhou");
+    }
+  });
 }
 
 bootstrap().catch((err) => {
